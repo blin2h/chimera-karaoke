@@ -150,6 +150,9 @@ function LoadSong() {
       <Chip on={band} onClick={() => setBand(!band)} title="Play the file's other tracks along with the voice (from the next song you load)">
         Instruments
       </Chip>
+      <a className="chip" href="?karaoke" title="The karaoke player: a folder of songs, the band on a 3D stage">
+        Karaoke stage
+      </a>
       {imported && (
         <Chip on onClick={() => stopSinging()}>
           Stop “{demo}”

@@ -126,25 +126,69 @@ function note(ctx: BaseAudioContext, out: AudioNode, n: BandNote, at: number): v
   osc.stop(t1 + tb.release * 2);
 }
 
-/** Play `notes` (song seconds) with song time 0 at context time `at`. Returns a stop function. */
-export function playBand(ctx: AudioContext, out: AudioNode, notes: BandNote[], at: number): () => void {
+/** A band playing: its clock in song seconds (negative before it starts), its level, its stop. */
+export interface BandControl {
+  time(): number;
+  setLevel(level: number): void;
+  stop(): void;
+}
+
+/** where each channel sits on the stage (m; see src/ui/stage.ts), and where the audience listens */
+export interface BandSpace {
+  positions: Map<number, { x: number; z: number }>;
+  listener: { x: number; y: number; z: number };
+}
+
+/** Play `notes` (song seconds) with song time 0 at context time `at`; with `space`, each channel
+ *  sounds from its place on the stage (HRTF panning), the listener out front. */
+export function playBand(ctx: AudioContext, out: AudioNode, notes: BandNote[], at: number, space?: BandSpace): BandControl {
   const bus = ctx.createGain();
   bus.gain.value = 0.8;
   bus.connect(out);
+  const channels = new Map<number, AudioNode>();
+  if (space) {
+    const l = ctx.listener;
+    if (l.positionX) {
+      l.positionX.value = space.listener.x;
+      l.positionY.value = space.listener.y;
+      l.positionZ.value = space.listener.z;
+      l.forwardX.value = 0;
+      l.forwardY.value = 0;
+      l.forwardZ.value = -1;
+    } else l.setPosition(space.listener.x, space.listener.y, space.listener.z);
+  }
+  // a channel's way to the bus: through its panner when it has a place
+  const route = (channel: number): AudioNode => {
+    let node = channels.get(channel);
+    if (!node) {
+      const pos = space?.positions.get(channel);
+      if (pos) {
+        const p = new PannerNode(ctx, { panningModel: "HRTF", distanceModel: "inverse", refDistance: 4, rolloffFactor: 0.6, positionX: pos.x, positionY: 1.2, positionZ: pos.z });
+        p.connect(bus);
+        node = p;
+      } else node = bus;
+      channels.set(channel, node);
+    }
+    return node;
+  };
   let i = 0;
   const pump = () => {
     const horizon = ctx.currentTime + 0.6;
     while (i < notes.length && at + notes[i].start < horizon) {
       const n = notes[i++];
-      if (at + n.end > ctx.currentTime) note(ctx, bus, n, at);
+      if (at + n.end > ctx.currentTime) note(ctx, route(n.channel), n, at);
     }
     if (i >= notes.length) clearInterval(timer);
   };
   const timer = setInterval(pump, 150);
   pump();
-  return () => {
-    clearInterval(timer);
-    bus.gain.setTargetAtTime(0, ctx.currentTime, 0.03);
-    setTimeout(() => bus.disconnect(), 400);
+  return {
+    time: () => ctx.currentTime - at,
+    setLevel: (level) => bus.gain.setTargetAtTime(level, ctx.currentTime, 0.05),
+    stop: () => {
+      clearInterval(timer);
+      bus.gain.setTargetAtTime(0, ctx.currentTime, 0.03);
+      setTimeout(() => bus.disconnect(), 400);
+    },
   };
 }

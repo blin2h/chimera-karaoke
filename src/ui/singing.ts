@@ -15,7 +15,7 @@ import { EXHALE_LABEL } from "../wasm/engine.ts";
 import { DEMO_SONGS } from "../wasm/engine.ts";
 import type { DemoSong, Gesture } from "../wasm/types.ts";
 import { karaokeSyllables, singingSpans, type BandNote, type KaraokeSong } from "./karaoke.ts";
-import { playBand } from "../audio/band.ts";
+import { playBand, type BandControl, type BandSpace } from "../audio/band.ts";
 import { nearestBody, type BodyMix } from "./body.ts";
 
 /** A note on the piano roll, on the voice clock (s); t1 is null while it is held. */
@@ -244,7 +244,7 @@ interface DemoRun {
   /** voice clock of plan time 0, once the worklet has it */
   offset: number | null;
   /** an imported song's accompaniment, started with the voice: song time 0 at plan time `at` */
-  band?: { notes: BandNote[]; at: number; stop?: () => void };
+  band?: { notes: BandNote[]; at: number; space?: BandSpace; control?: BandControl };
 }
 
 let demoRun: DemoRun | null = null;
@@ -259,7 +259,8 @@ engine.onPlanned((m) => {
   const out = engine.bandOutput();
   if (d.band && out && engine.ctx) {
     const at = engine.ctx.currentTime + (m.t0 - (engine.voiceClock() ?? m.t0)) + d.band.at;
-    d.band.stop = playBand(engine.ctx, out, d.band.notes, at);
+    d.band.control = playBand(engine.ctx, out, d.band.notes, at, d.band.space);
+    d.band.control.setLevel(bandLevel);
   }
   d.times.forEach(([a, b], k) => addNote(d.midi[k], m.t0 + a, d.text[k], true, m.t0 + b - 0.02));
 });
@@ -273,10 +274,10 @@ export async function playDemo(name: string, body: BodyMix, ready?: () => Promis
 /** Sing a song parsed from a MIDI/.kar file, in the language set in the UI: its own lyrics note
  *  by note, or the words in the lyrics box when it has none; with its other tracks when the band
  *  is on (the voice then keeps the file's timing, rests and all). */
-export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>): Promise<void> {
+export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>, space?: BandSpace): Promise<void> {
   const l = lang();
   const words = song.words;
-  const timed = useSing.getState().band && song.band.length ? { times: song.times, band: song.band } : null;
+  const timed = useSing.getState().band && song.band.length ? { times: song.times, band: song.band, space } : null;
   await runSong({ ...song, lang: l, lyrics: song.lyrics || useSing.getState().lyrics }, body, ready, words && (() => karaokeSyllables(words, (text) => lyricsToSyllables(text, l))), timed);
 }
 
@@ -305,7 +306,7 @@ function planTimed(notes: { midi: number; syl: Syllable }[], times: [number, num
   return { plan, spans };
 }
 
-async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void>, syllables?: (() => Syllable[]) | null, timed?: { times: [number, number][]; band: BandNote[] } | null): Promise<void> {
+async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void>, syllables?: (() => Syllable[]) | null, timed?: { times: [number, number][]; band: BandNote[]; space?: BandSpace } | null): Promise<void> {
   stopSinging();
   const token = demoToken;
   await ready?.();
@@ -354,9 +355,26 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
     parent,
     end: Math.max(plan.end, bandEnd),
     offset: null,
-    band: timed ? { notes: timed.band, at: BAND_LEAD } : undefined,
+    band: timed ? { notes: timed.band, at: BAND_LEAD, space: timed.space } : undefined,
   };
   useSing.setState({ lyrics: song.lyrics, syllables: syl, cursor: 0, demo: song.name, demoAt: -1 });
+}
+
+/** the band's level (0–1.5), kept across songs */
+let bandLevel = 0.8;
+export function setBandLevel(level: number): void {
+  bandLevel = level;
+  demoRun?.band?.control?.setLevel(level);
+}
+
+/** The playing band's clock (song seconds), for the stage; null when no band plays. */
+export function bandTime(): number | null {
+  return demoRun?.band?.control?.time() ?? null;
+}
+
+/** The sung note at the playhead (an index into the song's syllables), −1 between notes. */
+export function sungIndex(): number {
+  return useSing.getState().demoAt;
 }
 
 function stopDemo(): void {
@@ -364,7 +382,7 @@ function stopDemo(): void {
   const d = demoRun;
   if (!d) return;
   demoRun = null;
-  d.band?.stop?.();
+  d.band?.control?.stop();
   engine.stopSpeech();
   // notes not yet sung leave the roll; the one sounding ends now
   const t = now();
