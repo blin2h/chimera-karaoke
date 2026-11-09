@@ -172,6 +172,22 @@ describe("parseKaraoke", () => {
     expect(new Set(song.band.map((n) => n.channel))).toEqual(new Set([0]));
   });
 
+  test("long silences close up: an hour's lead-in, a minute's gap, a note never let go", () => {
+    const hour = 7200 * 480; // 7200 beats at 120 bpm
+    const song = parseKaraoke(
+      midi(1, [
+        at([[0, tempo(500000)]]),
+        at([[hour, lyric("Do ")], ...note(60, hour, 480), [hour + 480, lyric("re")], ...note(62, hour + 480, 480), [hour + 120 * 480, lyric("mi")], ...note(64, hour + 120 * 480, 480)]),
+        at([...note(40, hour, 480 * 600, 1), ...note(43, hour + 120 * 480, 480, 1)]), // a bass held for 5 minutes
+      ]),
+    );
+    // the song starts a second before its first note; the minute between "re" and "mi" is 2 s
+    expect(song.times).toEqual([[1, 1.5], [1.5, 2], [3.5, 4]]);
+    // the held note is cut where the silence closes up, and nothing runs for an hour
+    expect(song.band[0].end).toBeCloseTo(3.5, 6);
+    expect(song.duration).toBeCloseTo(4, 6);
+  });
+
   test("a rest splits the singing into stretches", () => {
     expect(singingSpans([[0, 0.5], [0.5, 1], [1.1, 1.5], [3, 4], [4, 5]])).toEqual([[0, 3], [3, 5]]);
     expect(singingSpans([])).toEqual([]);

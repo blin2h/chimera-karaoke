@@ -10,7 +10,7 @@ import { PRESETS, presetOf } from "../body.ts";
 import { useLang } from "../speech.ts";
 import { parseKaraoke, type KaraokeSong } from "../karaoke.ts";
 import { performers, LISTENER, type Performer } from "../stage.ts";
-import { playImported, stopSinging, tickSinging, useSing, setBandLevel, bandTime } from "../singing.ts";
+import { playImported, stopSinging, tickSinging, useSing, setBandLevel, songTime } from "../singing.ts";
 import { engine } from "../../audio/AudioEngine.ts";
 import { FAMILY_LABEL } from "../../audio/gm.ts";
 import { AnatomyView3D } from "./AnatomyView3D.tsx";
@@ -45,6 +45,10 @@ export function KaraokePage() {
   const setVolume = useStore((s) => s.setVolume);
   const start = useStore((s) => s.start);
   const [bandLevel, setLevel] = useState(0.8);
+  /** where a paused song stands (s); null when stopped */
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
+  /** the timeline's position while it is dragged */
+  const [dragging, setDragging] = useState<number | null>(null);
   const playing = demo !== null && loaded !== null && demo === loaded.song.name;
 
   // the lyrics' highlight and the clock follow the voice every frame
@@ -75,17 +79,38 @@ export function KaraokePage() {
     });
   };
 
+  /** sing the loaded song from second `from` */
+  const sing = async (l: Loaded, from: number) => {
+    setPausedAt(null);
+    const positions = new Map(l.cast.map((p) => [p.channel, { x: p.x, z: p.z }]));
+    await playImported(l.song, body, start, { space: { positions, listener: LISTENER }, timed: true, from });
+  };
   const play = async (file: File) => {
     try {
       const song = parseKaraoke(await file.arrayBuffer(), file.name);
-      const cast = performers(song.band);
-      setLoaded({ file, song, cast });
+      const l = { file, song, cast: performers(song.band) };
+      setLoaded(l);
       setError(null);
-      const positions = new Map(cast.map((p) => [p.channel, { x: p.x, z: p.z }]));
-      await playImported(song, body, start, { positions, listener: LISTENER });
+      await sing(l, 0);
     } catch (e) {
       setError(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+  const pause = () => {
+    const t = songTime();
+    stopSinging();
+    setPausedAt(t ?? 0);
+  };
+  const stop = () => {
+    stopSinging();
+    setPausedAt(null);
+  };
+  /** the timeline let go at `t`: playing, sing on from there; paused or stopped, wait there */
+  const seek = (t: number) => {
+    setDragging(null);
+    if (!loaded) return;
+    if (playing) void sing(loaded, t);
+    else setPausedAt(t);
   };
 
   const shown = useMemo(() => {
@@ -93,8 +118,8 @@ export function KaraokePage() {
     return q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
   }, [files, filter]);
   const index = loaded ? files.indexOf(loaded.file) : -1;
-  const t = bandTime();
-  const length = loaded ? Math.max(loaded.song.times.at(-1)?.[1] ?? 0, loaded.song.band.at(-1)?.end ?? 0) : 0;
+  const length = loaded?.song.duration ?? 0;
+  const now = dragging ?? (playing ? (songTime() ?? 0) : (pausedAt ?? 0));
 
   return (
     <div
@@ -162,7 +187,7 @@ export function KaraokePage() {
 
         <Screen className="karaoke-stage" focus title="Palco" sub={loaded ? cast(loaded.cast) : undefined}>
           {loaded ? (
-            <StageView performers={loaded.cast} notes={loaded.song.band} time={bandTime} singerActive={() => (engine.latest?.t.outRms ?? 0) > 0.01} />
+            <StageView performers={loaded.cast} notes={loaded.song.band} time={songTime} singerActive={() => (engine.latest?.t.outRms ?? 0) > 0.01} />
           ) : (
             <p className="karaoke-hint">Scegli un brano: la band sale sul palco, ogni strumento al suo posto.</p>
           )}
@@ -176,13 +201,35 @@ export function KaraokePage() {
       <footer className="karaoke-bottom">
         <Lyrics />
         <div className="karaoke-transport">
-          <button type="button" className="primary large" disabled={!loaded && !files.length} onClick={() => (playing ? stopSinging() : void play(loaded?.file ?? files[0]))}>
-            {playing ? "Stop" : "Canta"}
+          <button
+            type="button"
+            className="primary large"
+            disabled={!loaded && !files.length}
+            onClick={() => (playing ? pause() : loaded ? void sing(loaded, pausedAt ?? 0) : void play(files[0]))}
+          >
+            {playing ? "Pausa" : pausedAt !== null ? "Riprendi" : "Canta"}
+          </button>
+          <button type="button" className="ghost" disabled={!playing && pausedAt === null} onClick={stop}>
+            Stop
           </button>
           <button type="button" className="ghost" disabled={index < 0 || index + 1 >= files.length} onClick={() => void play(files[index + 1])}>
             Prossimo
           </button>
-          <span className="karaoke-time">{playing && t !== null ? `${clock(t)} / ${clock(length)}` : loaded ? clock(length) : ""}</span>
+          <span className="karaoke-time">{loaded ? `${clock(now)} / ${clock(length)}` : ""}</span>
+          <input
+            className="karaoke-seek"
+            type="range"
+            aria-label="Posizione nel brano"
+            min={0}
+            max={length || 1}
+            step={0.1}
+            value={Math.min(now, length)}
+            disabled={!loaded}
+            onChange={(e) => setDragging(Number(e.target.value))}
+            onPointerUp={(e) => seek(Number(e.currentTarget.value))}
+            onKeyUp={(e) => seek(Number(e.currentTarget.value))}
+            style={{ "--pos": `${length ? (100 * Math.min(now, length)) / length : 0}%` } as React.CSSProperties}
+          />
           {error && (
             <span className="karaoke-error" role="alert">
               {error}

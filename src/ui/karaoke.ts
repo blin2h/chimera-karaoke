@@ -49,6 +49,8 @@ export interface KaraokeSong {
   times: [number, number][];
   /** the other tracks' notes, by start time */
   band: BandNote[];
+  /** from the song's start to its last note's end (s), long silences closed up */
+  duration: number;
   octave: { male: number; female: number; child: number };
 }
 
@@ -378,6 +380,11 @@ export function parseKaraoke(data: ArrayBuffer | Uint8Array, fileName?: string):
     .filter((n) => n.end > n.start)
     .map((n) => ({ midi: n.midi, channel: n.channel, program: program(n.channel, n.start), velocity: n.velocity / 127, volume: volume(n.channel, n.start) / 127, start: seconds(n.start), end: seconds(n.end) }))
     .sort((a, b) => a.start - b.start);
+  const voice = notes.map((n): [number, number] => [seconds(n.start), Math.min(seconds(n.end), seconds(n.start) + LONGEST)]);
+  for (const n of band) n.end = Math.min(n.end, n.start + LONGEST);
+  const shift = closeSilences([...voice.map(([a]) => a), ...band.map((n) => n.start)]);
+  const times = voice.map(([a, b]): [number, number] => [shift(a), shift(b)]);
+  const playing = band.map((n) => ({ ...n, start: shift(n.start), end: shift(n.end) }));
 
   return {
     name: (fileName ?? "Imported song").replace(/\.(mid|midi|kar)$/i, ""),
@@ -385,9 +392,44 @@ export function parseKaraoke(data: ArrayBuffer | Uint8Array, fileName?: string):
     lyrics: words ? words.map((w) => w.parts.join("-") + (w.phraseEnd ? "," : "")).join(" ").replace(/,$/, ".") : "",
     notes: notes.map((n, i) => [n.midi, beats[i]]),
     words,
-    times: notes.map((n) => [seconds(n.start), seconds(n.end)]),
-    band,
+    times,
+    band: playing,
+    duration: Math.max(times.at(-1)?.[1] ?? 0, playing.reduce((e, n) => Math.max(e, n.end), 0)),
     octave: { male: female - 1, female, child: female },
+  };
+}
+
+/** a note held longer than this (s) was never let go: it ends here */
+const LONGEST = 20;
+/** no note starting for longer than this (s) is closed up to it */
+const KEEP = 2;
+/** the song starts this long (s) before its first note */
+const LEAD = 1;
+
+/**
+ * File seconds → song seconds, the long silences closed up. Some files start after an hour of
+ * silence, or keep their music in blocks a minute apart (the lyrics pausing with them, a pad
+ * sometimes held across), or drop a stray note far past the end: a karaoke player has nothing to
+ * show or sing there. Between two note starts more than KEEP apart the song moves on after KEEP
+ * (a note still held is cut there); the lead-in is at most LEAD. Monotonic, so order is kept.
+ */
+function closeSilences(onsets: number[]): (t: number) => number {
+  const fx = [...new Set(onsets)].sort((a, b) => a - b);
+  if (!fx.length) return (t) => t;
+  // breakpoints: each note start, in file time and in song time
+  const sx = [Math.min(fx[0], LEAD)];
+  for (let k = 1; k < fx.length; k++) sx.push(sx[k - 1] + Math.min(fx[k] - fx[k - 1], KEEP));
+  return (t) => {
+    if (t <= fx[0]) return Math.max(0, sx[0] - (fx[0] - t));
+    let lo = 0;
+    let hi = fx.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (fx[mid] <= t) lo = mid;
+      else hi = mid - 1;
+    }
+    const d = t - fx[lo];
+    return sx[lo] + (lo + 1 < fx.length ? Math.min(d, sx[lo + 1] - sx[lo]) : d);
   };
 }
 

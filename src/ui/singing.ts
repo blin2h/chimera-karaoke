@@ -245,6 +245,11 @@ interface DemoRun {
   offset: number | null;
   /** an imported song's accompaniment, started with the voice: song time 0 at plan time `at` */
   band?: { notes: BandNote[]; at: number; space?: BandSpace; control?: BandControl };
+  /** sung on the file's clock (`songTime` runs), from song second `from`, its first note being
+   *  the song's note `base` (the lyrics count from the song's first) */
+  timed: boolean;
+  from: number;
+  base: number;
 }
 
 let demoRun: DemoRun | null = null;
@@ -254,16 +259,20 @@ let demoToken = 0;
 engine.onPlanned((m) => {
   const d = demoRun;
   if (!d || m.id !== d.id) return;
-  d.offset = m.t0;
-  // the band joins on the context's clock: plan time 0 is voice clock m.t0, so many seconds from now
+  begin(d, m.t0);
+});
+
+/** The run's plan time 0 is voice clock `t0`: start its clock, and the band on the context's. */
+function begin(d: DemoRun, t0: number): void {
+  d.offset = t0;
   const out = engine.bandOutput();
   if (d.band && out && engine.ctx) {
-    const at = engine.ctx.currentTime + (m.t0 - (engine.voiceClock() ?? m.t0)) + d.band.at;
+    const at = engine.ctx.currentTime + (t0 - (engine.voiceClock() ?? t0)) + d.band.at;
     d.band.control = playBand(engine.ctx, out, d.band.notes, at, d.band.space);
     d.band.control.setLevel(bandLevel);
   }
-  d.times.forEach(([a, b], k) => addNote(d.midi[k], m.t0 + a, d.text[k], true, m.t0 + b - 0.02));
-});
+  d.times.forEach(([a, b], k) => addNote(d.midi[k], t0 + a, d.text[k], true, t0 + b - 0.02));
+}
 
 /** Sing a demo song (after `ready`, e.g. audio startup, resolves; unless stopped meanwhile). */
 export async function playDemo(name: string, body: BodyMix, ready?: () => Promise<void>): Promise<void> {
@@ -271,13 +280,17 @@ export async function playDemo(name: string, body: BodyMix, ready?: () => Promis
   if (song) await runSong(song, body, ready);
 }
 
-/** Sing a song parsed from a MIDI/.kar file, in the language set in the UI: its own lyrics note
- *  by note, or the words in the lyrics box when it has none; with its other tracks when the band
- *  is on (the voice then keeps the file's timing, rests and all). */
-export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>, space?: BandSpace): Promise<void> {
+/**
+ * Sing a song parsed from a MIDI/.kar file, in the language set in the UI: its own lyrics note
+ * by note, or the words in the lyrics box when it has none; with its other tracks when the band
+ * is on. With the band, or `timed`, the voice keeps the file's timing, rests and all, and the
+ * song can start `from` any second (the karaoke player's timeline).
+ */
+export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>, o: { space?: BandSpace; timed?: boolean; from?: number } = {}): Promise<void> {
   const l = lang();
   const words = song.words;
-  const timed = useSing.getState().band && song.band.length ? { times: song.times, band: song.band, space } : null;
+  const bandOn = useSing.getState().band && song.band.length > 0;
+  const timed = bandOn || o.timed ? { times: song.times, band: bandOn ? song.band : [], space: o.space, from: Math.max(0, o.from ?? 0) } : null;
   await runSong({ ...song, lang: l, lyrics: song.lyrics || useSing.getState().lyrics }, body, ready, words && (() => karaokeSyllables(words, (text) => lyricsToSyllables(text, l))), timed);
 }
 
@@ -306,7 +319,7 @@ function planTimed(notes: { midi: number; syl: Syllable }[], times: [number, num
   return { plan, spans };
 }
 
-async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void>, syllables?: (() => Syllable[]) | null, timed?: { times: [number, number][]; band: BandNote[]; space?: BandSpace } | null): Promise<void> {
+async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void>, syllables?: (() => Syllable[]) | null, timed?: { times: [number, number][]; band: BandNote[]; space?: BandSpace; from: number } | null): Promise<void> {
   stopSinging();
   const token = demoToken;
   await ready?.();
@@ -319,14 +332,21 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
   if (token !== demoToken) return;
   // read once the dictionary is in
   const syl = syllables ? syllables() : lyricsToSyllables(song.lyrics, songLang);
-  if (!syl.length) return;
+  if (!syl.length && !timed) return;
   const shift = song.octave[nearestBody(body)] * 12;
-  const notes = song.notes.map((n, i) => ({ midi: n[0] + shift, beats: n[1], syl: syl[i % syl.length] }));
+  let notes = song.notes.map((n, i) => ({ midi: n[0] + shift, beats: n[1], syl: syl.length ? syl[i % syl.length] : AH }));
   const vibrato = useSing.getState().vibrato;
   let plan: Plan;
   let times: [number, number][];
+  // from a point in the song: the notes from there on, the band's notes still sounding (what is
+  // left of them), all on a clock that starts there
+  const from = timed?.from ?? 0;
+  const base = timed ? timed.times.findIndex(([a]) => a >= from - 0.02) : 0;
+  const first = base < 0 ? notes.length : base;
+  const band = timed?.band.filter((n) => n.end > from).map((n) => ({ ...n, start: Math.max(0, n.start - from), end: n.end - from })) ?? [];
   if (timed) {
-    ({ plan, spans: times } = planTimed(notes, timed.times, body, vibrato));
+    notes = notes.slice(first);
+    ({ plan, spans: times } = planTimed(notes, timed.times.slice(first).map(([a, b]): [number, number] => [a - from, b - from]), body, vibrato));
   } else {
     const t0 = 0.35;
     plan = planSong(notes, { body, bpm: song.bpm, t0, vibrato });
@@ -345,7 +365,7 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
   const parent: number[] = [];
   notes.forEach((n, i) => parent.push(n.syl.melisma && i > 0 ? parent[i - 1] : i));
   const shown = parent.map((p) => written(notes[p].syl));
-  const bandEnd = timed ? BAND_LEAD + timed.band.reduce((e, n) => Math.max(e, n.end), 0) : 0;
+  const bandEnd = timed ? BAND_LEAD + band.reduce((e, n) => Math.max(e, n.end), 0) : 0;
   demoRun = {
     id,
     times,
@@ -355,9 +375,14 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
     parent,
     end: Math.max(plan.end, bandEnd),
     offset: null,
-    band: timed ? { notes: timed.band, at: BAND_LEAD, space: timed.space } : undefined,
+    band: timed && band.length ? { notes: band, at: BAND_LEAD, space: timed.space } : undefined,
+    timed: !!timed,
+    from,
+    base: first,
   };
   useSing.setState({ lyrics: song.lyrics, syllables: syl, cursor: 0, demo: song.name, demoAt: -1 });
+  // nothing left to sing (a start past the last syllable): no plan comes back, the clock starts now
+  if (!plan.segments.length) begin(demoRun, (engine.voiceClock() ?? 0) + 0.03);
 }
 
 /** the band's level (0–1.5), kept across songs */
@@ -367,14 +392,11 @@ export function setBandLevel(level: number): void {
   demoRun?.band?.control?.setLevel(level);
 }
 
-/** The playing band's clock (song seconds), for the stage; null when no band plays. */
-export function bandTime(): number | null {
-  return demoRun?.band?.control?.time() ?? null;
-}
-
-/** The sung note at the playhead (an index into the song's syllables), −1 between notes. */
-export function sungIndex(): number {
-  return useSing.getState().demoAt;
+/** The song's clock (song seconds) while an imported song plays on its own timing, else null. */
+export function songTime(): number | null {
+  const d = demoRun;
+  if (!d?.timed || d.offset === null) return null;
+  return now() - d.offset - BAND_LEAD + d.from;
 }
 
 function stopDemo(): void {
@@ -403,7 +425,8 @@ export function tickSinging(): void {
   }
   let k = -1;
   while (k + 1 < d.times.length && d.times[k + 1][0] <= t) k++;
-  if (k !== useSing.getState().demoAt) useSing.setState({ demoAt: k });
+  const at = k < 0 ? d.base - 1 : d.base + k;
+  if (at !== useSing.getState().demoAt) useSing.setState({ demoAt: at });
 }
 
 /** Stop everything sung (leaving Sing mode, changing body): demo, notes and endings. */
