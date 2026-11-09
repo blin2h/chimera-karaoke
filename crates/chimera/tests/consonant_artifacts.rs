@@ -155,3 +155,40 @@ fn an_f_does_not_click() {
     }
     assert!(loud.is_empty(), "f/v onsets that click: {loud:?}");
 }
+
+/// rms of x[a..b] in 4 ms frames, in dB below the loudest frame of the whole sound
+fn frames_db(x: &[f32], t0: f64, t1: f64) -> Vec<f64> {
+    let hop = idx(0.004);
+    let rms = |a: usize| (x[a..a + hop].iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>() / hop as f64).sqrt();
+    let top = (0..x.len() / hop - 1).map(|k| rms(k * hop)).fold(1e-12, f64::max);
+    (idx(t0) / hop..idx(t1) / hop).map(|k| 20.0 * (rms(k * hop) / top + 1e-12).log10()).collect()
+}
+
+/// A listener: the Italian R "often sounds wrong" (2026-11-09). The trill's strikes had a stop's
+/// 30 ms ramps at 26 a second: they ran into one closure, the voice died for ~50 ms and /ara/
+/// sounded like a long /d/. A trill dips at each strike and the voice carries on between them.
+#[test]
+fn a_trill_beats_and_keeps_voicing() {
+    for (body, name, f0) in VOICES {
+        let (plan, out) = render(plan_utterance(&tokenize_ipa("a r a"), &options(name, f0)), body, f0);
+        let r = plan.segments.iter().find(|s| s.ipa == "r").unwrap();
+        let db = frames_db(&out, r.t0, r.t1 + 0.01);
+        let floor = db.iter().cloned().fold(0.0, f64::min);
+        // dips (a strike) and recoveries of 10 dB from them, between
+        let mut strikes = 0;
+        let mut low: Option<f64> = None;
+        for &d in &db {
+            match low {
+                None if d < -14.0 => {
+                    strikes += 1;
+                    low = Some(d);
+                }
+                Some(m) if d > m + 10.0 => low = None,
+                Some(m) => low = Some(m.min(d)),
+                None => {}
+            }
+        }
+        assert!(floor > -32.0, "{name}: the voice dies in the trill ({floor:.1} dB): {db:.0?}");
+        assert!(strikes >= 2, "{name}: {strikes} strikes heard in the trill: {db:.0?}");
+    }
+}

@@ -273,16 +273,7 @@ pub fn plan_utterance(input: &[Segment], o: &PlanOptions) -> Plan {
             Manner::Stop if pre_placed_behind_closure(&segs, i) => add_oral(&def.targets, t0 + js_min(PLACED_CLOSURE_DELAY, js_max(0.0, dur - 0.03)), t1, 1.55, def.ipa),
             Manner::Stop | Manner::Nasal => add_oral(&def.targets, t0, t1, 1.55, def.ipa),
             Manner::Tap => add_oral(&def.targets, t0, t1, 2.8, def.ipa),
-            Manner::Trill => {
-                // driven trill: rapid alternation of near-closure and release at ~26 Hz
-                let n = js_max(2.0, js_round(dur * 26.0));
-                let mut k = 0.0;
-                while k < n {
-                    let a = t0 + (k / n) * dur;
-                    add_oral(&def.targets, a, a + 0.35 / 26.0, 3.2, def.ipa);
-                    k += 1.0;
-                }
-            }
+            Manner::Trill => trill_into(def, t0, dur, &mut gestures),
             Manner::Affricate => {
                 let split = t0 + dur * 0.55;
                 add_oral(&def.targets, t0, split, 2.0, def.ipa);
@@ -454,6 +445,42 @@ pub fn oral_gestures(def: &PhonemeDef, tg: &ArticPatch, a: f64, b: f64, speed: f
     let mut out = Vec::with_capacity(4);
     oral_gestures_into(def, tg, a, b, speed, label, &mut out);
     out
+}
+
+/// strikes a second of a trill (an alveolar /r/ beats at ~25 Hz)
+const TRILL_RATE: f64 = 25.0;
+/// how far the tip drops between strikes (cm): open enough that the voice carries on through
+const TRILL_OPEN: f64 = 0.6;
+
+/**
+ * A trill as the tip moves in one: two strikes or more (an Italian /r/ two or three, a doubled
+ * /rr/ more), each a brief contact (as a tap's) and then an opening as wide as a vowel's, so the
+ * voice dips at each strike and carries on between them. The strikes' gestures have short
+ * ramps: with a stop's (30 ms in, at 25 strikes a second) they ran together into one closure,
+ * the voice died and the /r/ sounded like a long /d/.
+ */
+fn trill_into(def: &PhonemeDef, t0: f64, dur: f64, out: &mut Vec<Gesture>) {
+    let n = js_max(2.0, js_round(dur * TRILL_RATE));
+    let period = dur / n;
+    let contact = artic_targets(&def.targets);
+    // opened the way the strike closes: the tip or the dorsum down, the lips apart
+    let mut open = def.targets.clone();
+    for (key, by) in [(ArticKey::TtY, -TRILL_OPEN), (ArticKey::TbY, -TRILL_OPEN), (ArticKey::LipAp, 0.5)] {
+        if let Some(v) = def.targets.get(key) {
+            open.set(key, v + by);
+        }
+    }
+    let open = artic_targets(&open);
+    // the tip rises to the first strike from the vowel before (as fast as a tap's)
+    out.push(Gesture::new(t0 - 0.02, t0, 0.012, 0.004, 40.0, open.clone()).speed(6.0).label(def.ipa));
+    let mut k = 0.0;
+    while k < n {
+        let a = t0 + k * period;
+        let shut = a + 0.4 * period;
+        out.push(Gesture::new(a, shut, 0.004, 0.004, 40.0, contact.clone()).speed(6.0).label(def.ipa));
+        out.push(Gesture::new(shut, a + period, 0.004, if k + 1.0 < n { 0.004 } else { 0.02 }, 40.0, open.clone()).speed(6.0).label(def.ipa));
+        k += 1.0;
+    }
 }
 
 /// [`oral_gestures`], appended to `out` (at most four gestures; no allocation when `out` has

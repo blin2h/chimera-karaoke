@@ -217,7 +217,7 @@ fn base() -> Vec<PhonemeDef> {
         c("ʎ", "palatal lateral", M::Lateral, Voiced, "palatal", tg(PAL_STOP, &[(Lateral, 1.0)]), &[TbX, TbY, Lateral], 0.07),
         c("ɾ", "alveolar tap", M::Tap, Voiced, "alveolar", t(ALV_STOP), &TIP, 0.025),
         c("ɽ", "retroflex flap", M::Tap, Voiced, "retroflex", t(RETRO_STOP), TIP_CURL, 0.03),
-        c("r", "alveolar trill", M::Trill, Voiced, "alveolar", t(&[(TtX, 6.25), (TtY, 9.45)]), &TIP, 0.11),
+        c("r", "alveolar trill", M::Trill, Voiced, "alveolar", t(ALV_STOP), &TIP, 0.11),
         c("ʀ", "uvular trill", M::Trill, Voiced, "uvular", t(&[(TbX, 1.55), (TbY, 7.85)]), &BODY, 0.11),
         c("ʙ", "bilabial trill", M::Trill, Voiced, "bilabial", t(&[(LipAp, 0.02)]), &LIPS, 0.12),
     ]
