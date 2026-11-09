@@ -20,6 +20,7 @@ export class AudioEngine {
   /** long time-domain window for the waveform scope */
   analyserScope: AnalyserNode | null = null;
   private master: GainNode | null = null;
+  private band: GainNode | null = null;
   /** "close mic" chain: proximity bass, presence, compression (beatboxers cup the mic) */
   private micIn: AudioNode | null = null;
   private micOn = false;
@@ -208,6 +209,19 @@ export class AudioEngine {
 
   setVolume(v: number): void {
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+    if (this.band && this.ctx) this.band.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  }
+
+  /** Where an accompaniment plays: at the master volume, but kept out of the voice's analysers
+   *  (the spectra show the voice alone). Null before audio starts. */
+  bandOutput(): AudioNode | null {
+    if (!this.ctx || !this.master) return null;
+    if (!this.band) {
+      this.band = this.ctx.createGain();
+      this.band.gain.value = this.master.gain.value;
+      this.band.connect(this.ctx.destination);
+    }
+    return this.band;
   }
 
   setBody(body: BodyMix): void {

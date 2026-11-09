@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { useStore } from "../store.ts";
-import { useSing, playDemo, stopSinging, soundingSyllable, sungNow, DEMO_SONGS } from "../singing.ts";
+import { useSing, playDemo, playImported, stopSinging, soundingSyllable, sungNow, DEMO_SONGS } from "../singing.ts";
+import { parseKaraoke } from "../karaoke.ts";
 import { mouthWords } from "../mouthWords.ts";
 import { V } from "../colors.ts";
 import { Keys } from "./Keys.tsx";
 import { PianoRoll } from "./PianoRoll.tsx";
 import { SpectrumView } from "./SpectrumView.tsx";
 import { Chip, Screen } from "./Screen.tsx";
+import { LangPick } from "./SpeakPanel.tsx";
 import { EncoderPages } from "./Encoder.tsx";
 import { noteName } from "./VoiceControls.tsx";
 import type { InfoFn } from "./AnatomyView.tsx";
@@ -111,6 +114,56 @@ function SongControls() {
   );
 }
 
+/** Load a MIDI or .kar file from the user's computer and sing it, like a demo. */
+function LoadSong() {
+  const demo = useSing((s) => s.demo);
+  const band = useSing((s) => s.band);
+  const setBand = useSing((s) => s.setBand);
+  const body = useStore((s) => s.body);
+  const start = useStore((s) => s.start);
+  const [error, setError] = useState<string | null>(null);
+  const imported = demo !== null && !DEMO_SONGS.some((s) => s.name === demo);
+  return (
+    <div className="demo-songs load-song" role="group" aria-label="Sing a file from your computer">
+      <label className="chip" title="The melody track is sung with the file's own lyrics (or the words in the box, if it has none). The file stays on your computer.">
+        <input
+          type="file"
+          accept=".mid,.midi,.kar,audio/midi"
+          hidden
+          aria-label="Load a MIDI or karaoke file"
+          onChange={async (e) => {
+            const input = e.currentTarget;
+            const file = input.files?.[0];
+            input.value = "";
+            if (!file) return;
+            try {
+              const song = parseKaraoke(await file.arrayBuffer(), file.name);
+              setError(null);
+              await playImported(song, body, start);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+            }
+          }}
+        />
+        Load MIDI / .kar
+      </label>
+      <Chip on={band} onClick={() => setBand(!band)} title="Play the file's other tracks along with the voice (from the next song you load)">
+        Instruments
+      </Chip>
+      {imported && (
+        <Chip on onClick={() => stopSinging()}>
+          Stop “{demo}”
+        </Chip>
+      )}
+      {error && (
+        <span className="file-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function DemoSongs() {
   const body = useStore((s) => s.body);
   const start = useStore((s) => s.start);
@@ -145,7 +198,18 @@ export function SingRight() {
       <Screen className="s-roll" title="Piano roll" sub="Notes and the pitch sung">
         <PianoRoll />
       </Screen>
-      <Screen className="s-lyrics" title="Lyrics" sub="Each note sings the next syllable" tools={<DemoSongs />}>
+      <Screen
+        className="s-lyrics"
+        title="Lyrics"
+        sub="Each note sings the next syllable"
+        tools={
+          <>
+            <LangPick />
+            <DemoSongs />
+            <LoadSong />
+          </>
+        }
+      >
         <Lyrics />
       </Screen>
       <Screen className="s-spec" title="Spectrum" sub={ring ? "Ring on" : ""}>

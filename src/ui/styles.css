@@ -2137,6 +2137,23 @@ input[type="range"]::-moz-range-thumb {
   font-size: 9px;
 }
 
+.load-song .chip {
+  display: inline-flex;
+  align-items: center;
+}
+
+.load-song .file-error {
+  color: var(--red);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  align-self: center;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .lyrics {
   padding: 6px 14px 10px;
   display: grid;

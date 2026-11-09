@@ -1,6 +1,7 @@
 /** Main-thread speech planning: text/IPA → phrases → gestural plan → worklet. */
 import type { BodyMix } from "../wasm/types.ts";
-import { EnglishG2P, type Phrase } from "../wasm/engine.ts";
+import { create } from "zustand";
+import { EnglishG2P, G2P, type Lang, type Phrase } from "../wasm/engine.ts";
 import { tokenizeIpa } from "../wasm/engine.ts";
 import { planPhrases, type Plan, type Segment } from "../wasm/engine.ts";
 import { engine } from "../audio/AudioEngine.ts";
@@ -8,6 +9,11 @@ import type { Gesture } from "../wasm/types.ts";
 import { wordSpans, type WordSpan } from "./words.ts";
 
 export const g2p = new EnglishG2P();
+const g2pIt = new G2P("it");
+export const g2pFor = (lang: Lang): G2P => (lang === "it" ? g2pIt : g2p);
+
+/** the language of Speak's text and Sing's lyrics */
+export const useLang = create<{ lang: Lang; setLang: (lang: Lang) => void }>((set) => ({ lang: "it", setLang: (lang) => set({ lang }) }));
 
 export interface SpokenPlan {
   plan: Plan;
@@ -64,12 +70,13 @@ export async function speakText(text: string, o: { ipa: boolean; body: BodyMix; 
   let phrases: Phrase[];
   if (o.ipa) phrases = ipaToPhrases(text);
   else {
+    const g = g2pFor(useLang.getState().lang);
     try {
-      await g2p.load();
+      await g.load();
     } catch {
       // dictionary unavailable: the letter-to-sound rules still work
     }
-    phrases = g2p.toPhrases(text);
+    phrases = g.toPhrases(text);
   }
   if (!phrases.length) return null;
   return speakPhrases(phrases, o);

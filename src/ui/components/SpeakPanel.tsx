@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store.ts";
-import { speakText, speakPhrases, stopSpeaking, onPlan, currentPlan, spokenWordNow } from "../speech.ts";
+import { speakText, speakPhrases, stopSpeaking, onPlan, currentPlan, spokenWordNow, useLang } from "../speech.ts";
 import { mouthWords } from "../mouthWords.ts";
 import { tokenizeIpa } from "../../wasm/engine.ts";
 import { Slider, Toggle } from "./Controls.tsx";
@@ -12,7 +12,25 @@ import type { InfoFn, SlotsFn } from "./AnatomyView.tsx";
 import { V } from "../colors.ts";
 import { engine } from "../../audio/AudioEngine.ts";
 
-const EXAMPLES = ["Hello. Can you hear me?", "She sells sea shells by the sea shore.", "Every sound here is air moving through a throat.", "The quick brown fox jumps over the lazy dog."];
+const EXAMPLES = {
+  it: ["Ciao. Mi senti?", "Trentatré trentini entrarono a Trento, tutti e trentatré trotterellando.", "Ogni suono qui è aria che passa per una gola.", "Nel mezzo del cammin di nostra vita"],
+  en: ["Hello. Can you hear me?", "She sells sea shells by the sea shore.", "Every sound here is air moving through a throat.", "The quick brown fox jumps over the lazy dog."],
+};
+
+/** Italian or English: Speak's text and Sing's lyrics */
+export function LangPick() {
+  const lang = useLang((s) => s.lang);
+  const setLang = useLang((s) => s.setLang);
+  return (
+    <div className="vowel-pick" role="group" aria-label="Language">
+      {(["it", "en"] as const).map((l) => (
+        <Chip key={l} on={lang === l} onClick={() => setLang(l)} title={l === "it" ? "Italian" : "English"}>
+          {l.toUpperCase()}
+        </Chip>
+      ))}
+    </div>
+  );
+}
 
 // IPA pulmonic consonant chart (rows = manner, columns = place); empty cells are null
 const PLACES = ["Bilabial", "Labiodental", "Dental", "Alveolar", "Postalveolar", "Retroflex", "Palatal", "Velar", "Uvular", "Pharyngeal", "Glottal"];
@@ -117,13 +135,16 @@ export function SpeakRight() {
   const body = useStore((s) => s.body);
   const f0 = useStore((s) => s.source.f0);
   const start = useStore((s) => s.start);
-  const [text, setText] = useState(EXAMPLES[0]);
+  const lang = useLang((s) => s.lang);
+  const [text, setText] = useState(EXAMPLES[lang][0]);
   const [ipa, setIpa] = useState(false);
   const [rate, setRate] = useState(1);
   const [busy, setBusy] = useState(false);
   const [trans, setTrans] = useState(currentPlan()?.transcription ?? "");
   const [vowel, setVowel] = useState("ɑ");
   useEffect(() => onPlan((p) => setTrans(p?.transcription ?? "")), []);
+  // an example in the other language gives way to this one's
+  useEffect(() => setText((t) => (EXAMPLES[lang === "it" ? "en" : "it"].includes(t) ? EXAMPLES[lang][0] : t)), [lang]);
 
   const speak = async () => {
     setBusy(true);
@@ -141,7 +162,17 @@ export function SpeakRight() {
 
   return (
     <div className="right right-speak">
-      <Screen className="s-say" title="Say" sub="Text to speech" tools={<Toggle label="Text is IPA" checked={ipa} onChange={setIpa} />}>
+      <Screen
+        className="s-say"
+        title="Say"
+        sub="Text to speech"
+        tools={
+          <>
+            <LangPick />
+            <Toggle label="Text is IPA" checked={ipa} onChange={setIpa} />
+          </>
+        }
+      >
         <div className="say">
           <div className="say-row">
             <textarea
@@ -174,7 +205,7 @@ export function SpeakRight() {
             </div>
           </div>
           <div className="examples" role="group" aria-label="Examples">
-            {EXAMPLES.map((ex) => (
+            {EXAMPLES[lang].map((ex) => (
               <Chip
                 key={ex}
                 toggle={false}

@@ -8,12 +8,14 @@
  */
 import { create } from "zustand";
 import { engine } from "../audio/AudioEngine.ts";
-import { g2p } from "./speech.ts";
-import { lyricsToSyllables, type Syllable } from "../wasm/engine.ts";
+import { g2pFor, useLang } from "./speech.ts";
+import { lyricsToSyllables, type Lang, type Plan, type Syllable } from "../wasm/engine.ts";
 import { planSong, planNoteOn, planNoteOff, planMelisma } from "../wasm/engine.ts";
 import { EXHALE_LABEL } from "../wasm/engine.ts";
 import { DEMO_SONGS } from "../wasm/engine.ts";
-import type { Gesture } from "../wasm/types.ts";
+import type { DemoSong, Gesture } from "../wasm/types.ts";
+import { karaokeSyllables, singingSpans, type BandNote, type KaraokeSong } from "./karaoke.ts";
+import { playBand } from "../audio/band.ts";
 import { nearestBody, type BodyMix } from "./body.ts";
 
 /** A note on the piano roll, on the voice clock (s); t1 is null while it is held. */
@@ -28,7 +30,8 @@ export interface RollNote {
 /** What the piano roll draws, read every frame (mutated in place: no re-render per note). */
 export const roll: { notes: RollNote[] } = { notes: [] };
 
-export const DEFAULT_LYRICS = "Hello there, I am a voice made of air.";
+export const DEFAULT_LYRICS: Record<Lang, string> = { en: "Hello there, I am a voice made of air.", it: "Ciao, sono una voce fatta d'aria." };
+const lang = () => useLang.getState().lang;
 
 /** sung when the lyrics are empty */
 const AH: Syllable = { text: "ah", onset: [], nucleus: { ipa: "ɑ", stress: 1 }, coda: [], wordEnd: true, phraseEnd: false };
@@ -40,6 +43,8 @@ interface SingState {
   cursor: number;
   /** vibrato depth on held vowels (cents) */
   vibrato: number;
+  /** an imported song's other tracks play along */
+  band: boolean;
   /** the demo song playing, if any */
   demo: string | null;
   /** index of the demo syllable being sung (−1: none yet) */
@@ -47,37 +52,49 @@ interface SingState {
   setLyrics: (text: string) => void;
   setCursor: (i: number) => void;
   setVibrato: (cents: number) => void;
+  setBand: (on: boolean) => void;
 }
 
 export const useSing = create<SingState>((set, get) => ({
-  lyrics: DEFAULT_LYRICS,
-  syllables: lyricsToSyllables(DEFAULT_LYRICS),
+  lyrics: DEFAULT_LYRICS[lang()],
+  syllables: lyricsToSyllables(DEFAULT_LYRICS[lang()], lang()),
   cursor: 0,
   vibrato: 35,
+  band: true,
   demo: null,
   demoAt: -1,
   setLyrics: (text) => {
     stopDemo();
-    set({ lyrics: text, syllables: lyricsToSyllables(text), cursor: 0 });
+    set({ lyrics: text, syllables: lyricsToSyllables(text, lang()), cursor: 0 });
   },
   setCursor: (i) => set({ cursor: Math.max(0, Math.min(i, Math.max(0, get().syllables.length - 1))) }),
   setVibrato: (cents) => set({ vibrato: cents }),
+  setBand: (on) => set({ band: on }),
 }));
 
 /** Load the pronouncing dictionary, then re-read the lyrics with it (the cursor stays). */
 export function ensureDictionary(): void {
-  if (g2p.loaded) return;
-  g2p
-    .load()
+  const g = g2pFor(lang());
+  if (g.loaded) return;
+  g.load()
     .then(() => {
       const s = useSing.getState();
-      const syllables = lyricsToSyllables(s.lyrics);
+      const syllables = lyricsToSyllables(s.lyrics, lang());
       useSing.setState({ syllables, cursor: Math.min(s.cursor, Math.max(0, syllables.length - 1)) });
     })
     .catch(() => {
       // no dictionary: the letter-to-sound rules keep working
     });
 }
+
+// another language re-reads the lyrics (the default lyrics change with it)
+useLang.subscribe(({ lang: l }, prev) => {
+  if (l === prev.lang) return;
+  const s = useSing.getState();
+  const lyrics = s.lyrics === DEFAULT_LYRICS[prev.lang] ? DEFAULT_LYRICS[l] : s.lyrics;
+  useSing.setState({ lyrics, syllables: lyricsToSyllables(lyrics, l), cursor: 0 });
+  ensureDictionary();
+});
 
 // ---- live notes
 
@@ -226,6 +243,8 @@ interface DemoRun {
   end: number;
   /** voice clock of plan time 0, once the worklet has it */
   offset: number | null;
+  /** an imported song's accompaniment, started with the voice: song time 0 at plan time `at` */
+  band?: { notes: BandNote[]; at: number; stop?: () => void };
 }
 
 let demoRun: DemoRun | null = null;
@@ -236,40 +255,107 @@ engine.onPlanned((m) => {
   const d = demoRun;
   if (!d || m.id !== d.id) return;
   d.offset = m.t0;
+  // the band joins on the context's clock: plan time 0 is voice clock m.t0, so many seconds from now
+  const out = engine.bandOutput();
+  if (d.band && out && engine.ctx) {
+    const at = engine.ctx.currentTime + (m.t0 - (engine.voiceClock() ?? m.t0)) + d.band.at;
+    d.band.stop = playBand(engine.ctx, out, d.band.notes, at);
+  }
   d.times.forEach(([a, b], k) => addNote(d.midi[k], m.t0 + a, d.text[k], true, m.t0 + b - 0.02));
 });
 
 /** Sing a demo song (after `ready`, e.g. audio startup, resolves; unless stopped meanwhile). */
 export async function playDemo(name: string, body: BodyMix, ready?: () => Promise<void>): Promise<void> {
   const song = DEMO_SONGS.find((s) => s.name === name);
-  if (!song) return;
+  if (song) await runSong(song, body, ready);
+}
+
+/** Sing a song parsed from a MIDI/.kar file, in the language set in the UI: its own lyrics note
+ *  by note, or the words in the lyrics box when it has none; with its other tracks when the band
+ *  is on (the voice then keeps the file's timing, rests and all). */
+export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>): Promise<void> {
+  const l = lang();
+  const words = song.words;
+  const timed = useSing.getState().band && song.band.length ? { times: song.times, band: song.band } : null;
+  await runSong({ ...song, lang: l, lyrics: song.lyrics || useSing.getState().lyrics }, body, ready, words && (() => karaokeSyllables(words, (text) => lyricsToSyllables(text, l))), timed);
+}
+
+/** plan time of song time 0 when the band plays (the first note's consonants come before it) */
+const BAND_LEAD = 0.35;
+/** gestures the worklet takes per message (MAX_GESTURES in processor.ts) */
+const MAX_SCHEDULE = 4000;
+
+/** A melody planned on the file's own clock: one `planSong` per stretch between rests (each its
+ *  own breath), placed at its time, merged into one plan. */
+function planTimed(notes: { midi: number; syl: Syllable }[], times: [number, number][], body: BodyMix, vibrato: number): { plan: Plan; spans: [number, number][] } {
+  const plan: Plan = { gestures: [], segments: [], end: 0 };
+  for (const [a, b] of singingSpans(times)) {
+    const part = notes.slice(a, b).map((n, k) => {
+      const i = a + k;
+      // bpm 60: a beat is a second; each note lasts to the next one's start, the last its own length
+      const beats = i + 1 < b ? times[i + 1][0] - times[i][0] : Math.max(0.15, times[i][1] - times[i][0]);
+      return { midi: n.midi, beats, syl: n.syl };
+    });
+    const p = planSong(part, { body, bpm: 60, t0: BAND_LEAD + times[a][0], vibrato });
+    plan.gestures.push(...p.gestures);
+    plan.segments.push(...p.segments);
+    plan.end = Math.max(plan.end, p.end);
+  }
+  const spans = times.map(([a], i): [number, number] => [BAND_LEAD + a, BAND_LEAD + (i + 1 < times.length ? Math.min(times[i + 1][0], times[i][1] + 0.3) : times[i][1])]);
+  return { plan, spans };
+}
+
+async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void>, syllables?: (() => Syllable[]) | null, timed?: { times: [number, number][]; band: BandNote[] } | null): Promise<void> {
   stopSinging();
   const token = demoToken;
   await ready?.();
+  const songLang = song.lang ?? "en";
   try {
-    await g2p.load();
+    await g2pFor(songLang).load();
   } catch {
     // letter-to-sound rules
   }
   if (token !== demoToken) return;
-  const syl = lyricsToSyllables(song.lyrics);
+  // read once the dictionary is in
+  const syl = syllables ? syllables() : lyricsToSyllables(song.lyrics, songLang);
   if (!syl.length) return;
   const shift = song.octave[nearestBody(body)] * 12;
   const notes = song.notes.map((n, i) => ({ midi: n[0] + shift, beats: n[1], syl: syl[i % syl.length] }));
-  const t0 = 0.35;
-  const plan = planSong(notes, { body, bpm: song.bpm, t0, vibrato: useSing.getState().vibrato });
-  const beat = 60 / song.bpm;
-  let t = t0;
-  const times = notes.map((n): [number, number] => {
-    const a = t;
-    t += n.beats * beat;
-    return [a, t];
-  });
-  const id = engine.schedule({ gestures: plan.gestures, segments: plan.segments, end: plan.end });
+  const vibrato = useSing.getState().vibrato;
+  let plan: Plan;
+  let times: [number, number][];
+  if (timed) {
+    ({ plan, spans: times } = planTimed(notes, timed.times, body, vibrato));
+  } else {
+    const t0 = 0.35;
+    plan = planSong(notes, { body, bpm: song.bpm, t0, vibrato });
+    const beat = 60 / song.bpm;
+    let t = t0;
+    times = notes.map((n): [number, number] => {
+      const a = t;
+      t += n.beats * beat;
+      return [a, t];
+    });
+  }
+  // a long song in several messages, the later ones added to the first (each lands within one
+  // audio block of it)
+  const id = engine.schedule({ gestures: plan.gestures.slice(0, MAX_SCHEDULE), segments: plan.segments, end: plan.end });
+  for (let k = MAX_SCHEDULE; k < plan.gestures.length; k += MAX_SCHEDULE) engine.schedule({ gestures: plan.gestures.slice(k, k + MAX_SCHEDULE), segments: [], end: plan.end }, false);
   const parent: number[] = [];
   notes.forEach((n, i) => parent.push(n.syl.melisma && i > 0 ? parent[i - 1] : i));
   const shown = parent.map((p) => written(notes[p].syl));
-  demoRun = { id, times, midi: notes.map((n) => n.midi), text: notes.map((n) => n.syl.text), shown, parent, end: plan.end, offset: null };
+  const bandEnd = timed ? BAND_LEAD + timed.band.reduce((e, n) => Math.max(e, n.end), 0) : 0;
+  demoRun = {
+    id,
+    times,
+    midi: notes.map((n) => n.midi),
+    text: notes.map((n) => n.syl.text),
+    shown,
+    parent,
+    end: Math.max(plan.end, bandEnd),
+    offset: null,
+    band: timed ? { notes: timed.band, at: BAND_LEAD } : undefined,
+  };
   useSing.setState({ lyrics: song.lyrics, syllables: syl, cursor: 0, demo: song.name, demoAt: -1 });
 }
 
@@ -278,6 +364,7 @@ function stopDemo(): void {
   const d = demoRun;
   if (!d) return;
   demoRun = null;
+  d.band?.stop?.();
   engine.stopSpeech();
   // notes not yet sung leave the roll; the one sounding ends now
   const t = now();
