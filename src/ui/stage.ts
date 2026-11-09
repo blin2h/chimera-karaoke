@@ -20,6 +20,8 @@ export interface Performer {
   voice: boolean;
   /** notes played */
   notes: number;
+  /** how many musicians: a section (strings, a choir, brass) is several, anything else one */
+  players: number;
   x: number;
   z: number;
 }
@@ -57,6 +59,9 @@ const VOICE_SPOTS = [
   { x: 3.0, z: -2.0 },
 ];
 
+/** General MIDI programs that are a section of players, and how many to draw */
+const SECTION: Record<number, number> = { 44: 4, 45: 4, 48: 6, 49: 6, 50: 5, 51: 5, 52: 4, 53: 4, 54: 2, 61: 3 };
+
 /** The band's performers, one per channel, in channel order. */
 export function performers(band: BandNote[]): Performer[] {
   const byChannel = new Map<number, { programs: Map<number, number>; notes: number }>();
@@ -86,6 +91,6 @@ export function performers(band: BandNote[]): Performer[] {
         x = s.x + s.dx * k;
         z = s.z + s.dz * k;
       }
-      return { channel, program, family, name: instrumentName(channel, program), voice, notes: c.notes, x, z };
+      return { channel, program, family, name: instrumentName(channel, program), voice, notes: c.notes, players: SECTION[program] ?? 1, x, z };
     });
 }
