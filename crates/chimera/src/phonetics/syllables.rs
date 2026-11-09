@@ -29,8 +29,31 @@ pub struct SyllableParts {
     pub coda: Vec<Segment>,
 }
 
-/// Split one word's segments into onset / nucleus / coda syllables.
+/// Split one word's segments into onset / nucleus / coda syllables (English onsets).
 pub fn syllabify_segments(segs: &[Segment]) -> Vec<SyllableParts> {
+    syllabify(segs, |c| ONSETS.contains(&c.iter().map(|s| s.ipa.as_str()).collect::<String>().as_str()))
+}
+
+/// Italian onsets: any consonant (a long one too), obstruent + r/l, s + consonant, s +
+/// obstruent + r/l, each optionally followed by a glide ("pjano", "kwando", "strjo").
+pub fn italian_onset(c: &[Segment]) -> bool {
+    let p: Vec<&str> = c.iter().map(|s| s.ipa.as_str()).collect();
+    fn legal(p: &[&str]) -> bool {
+        let obstruent = |a: &str| matches!(a, "p" | "b" | "t" | "d" | "k" | "g" | "f" | "v");
+        let liquid = |a: &str| matches!(a, "r" | "ɾ" | "l");
+        match p {
+            [_] => true,
+            [rest @ .., "j" | "w"] => legal(rest),
+            [a, l] => obstruent(a) && liquid(l) || matches!(*a, "s" | "z") && !matches!(*l, "s" | "z" | "ts" | "dz" | "ʃ"),
+            ["s" | "z", a, l] => obstruent(a) && liquid(l),
+            _ => false,
+        }
+    }
+    legal(&p)
+}
+
+/// Split one word's segments into syllables, the longest `legal_onset` cluster going right.
+pub fn syllabify(segs: &[Segment], legal_onset: impl Fn(&[Segment]) -> bool) -> Vec<SyllableParts> {
     let vi: Vec<usize> = segs.iter().enumerate().filter(|(_, s)| is_vowel(&s.ipa, BodyMix::MALE)).map(|(i, _)| i).collect();
     if vi.is_empty() {
         return Vec::new();
@@ -44,8 +67,7 @@ pub fn syllabify_segments(segs: &[Segment]) -> Vec<SyllableParts> {
             let between = &segs[v + 1..next];
             let mut k = 0;
             for len in (1..=3.min(between.len())).rev() {
-                let cluster: String = between[between.len() - len..].iter().map(|s| s.ipa.as_str()).collect();
-                if ONSETS.contains(&cluster.as_str()) {
+                if legal_onset(&between[between.len() - len..]) {
                     k = len;
                     break;
                 }
@@ -133,9 +155,65 @@ pub fn split_spelling(word: &str, n: usize) -> Vec<String> {
     (0..cuts.len() - 1).map(|i| slice(&w, cuts[i], cuts[i + 1])).collect()
 }
 
-/// Where lyrics get their pronunciations: `EnglishG2P`, or any `Fn(&str, bool) -> Vec<Segment>`.
+/// Italian spelling → n chunks: a single consonant goes right, doubled ones split ("tut-to"),
+/// a cluster that can start a word goes right ("pa-dre", "fi-glio", "gnoc-chi").
+pub fn split_spelling_it(word: &str, n: usize) -> Vec<String> {
+    const STARTS: [&str; 37] = [
+        "ch", "gh", "gn", "gl", "sc", "qu", "bl", "br", "cl", "cr", "dr", "fl", "fr", "gr", "pl", "pr", "tr", "vr", "sb", "sd", "sf", "sg", "sl", "sm", "sn", "sp",
+        "st", "sv", "str", "spr", "scr", "spl", "sch", "sgr", "sbr", "sdr", "sfr",
+    ];
+    if n <= 1 {
+        return vec![word.to_string()];
+    }
+    let w: Vec<char> = word.chars().collect();
+    let lower: Vec<char> = w.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+    let is_v = |c: char| "aeiouàáèéìíîòóùú".contains(c);
+    let mut groups: Vec<[usize; 2]> = Vec::new();
+    let mut i = 0;
+    while i < lower.len() {
+        if is_v(lower[i]) {
+            let s = i;
+            while i < lower.len() && is_v(lower[i]) {
+                i += 1;
+            }
+            groups.push([s, i]);
+        } else {
+            i += 1;
+        }
+    }
+    if groups.len() < n {
+        let mut out = vec![word.to_string()];
+        out.extend(std::iter::repeat_n("~".to_string(), n - 1));
+        return out;
+    }
+    while groups.len() > n {
+        let last = groups.pop().unwrap();
+        let k = groups.len() - 1;
+        groups[k][1] = last[1];
+    }
+    let mut cuts = vec![0];
+    for i in 0..groups.len() - 1 {
+        let (a, b) = (groups[i][1], groups[i + 1][0]);
+        let gap = b - a;
+        let right = if gap <= 1 || lower[b - 1] == lower[b - 2] || (lower[b - 2] == 'c' && lower[b - 1] == 'q') {
+            gap.min(1)
+        } else {
+            (2..=gap.min(3)).rev().find(|&k| STARTS.contains(&lower[b - k..b].iter().collect::<String>().as_str())).unwrap_or(1)
+        };
+        cuts.push(b - right);
+    }
+    cuts.push(w.len());
+    (0..cuts.len() - 1).map(|i| w[cuts[i]..cuts[i + 1]].iter().collect()).collect()
+}
+
+/// Where lyrics get their pronunciations: `EnglishG2P`, `ItalianG2P`, or any
+/// `Fn(&str, bool) -> Vec<Segment>` (English).
 pub trait WordSource {
     fn word(&self, w: &str, reduce: bool) -> Vec<Segment>;
+    /// Italian lyrics: accented letters in words, Italian syllables and hyphenation
+    fn italian(&self) -> bool {
+        false
+    }
 }
 
 impl<F: Fn(&str, bool) -> Vec<Segment>> WordSource for F {
@@ -147,12 +225,9 @@ impl<F: Fn(&str, bool) -> Vec<Segment>> WordSource for F {
 fn is_lyric_punct(c: char) -> bool {
     matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '\n')
 }
-fn is_word_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '\''
-}
-
-/// `text.match(/[A-Za-z'][A-Za-z'\-]*|(?<=\s|^)[~-](?=\s|$)|[.,;:!?\n]/g)`
-fn lyric_tokens(text: &str) -> Vec<String> {
+/// `text.match(/[A-Za-z'][A-Za-z'\-]*|(?<=\s|^)[~-](?=\s|$)|[.,;:!?\n]/g)` (any letter for Italian)
+fn lyric_tokens(text: &str, italian: bool) -> Vec<String> {
+    let is_word_start = |c: char| c.is_ascii_alphabetic() || c == '\'' || (italian && c.is_alphabetic());
     let s: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -180,7 +255,8 @@ fn lyric_tokens(text: &str) -> Vec<String> {
 pub fn lyrics_to_syllables(text: &str, g2p: &impl WordSource) -> Vec<Syllable> {
     let mut out: Vec<Syllable> = Vec::new();
     // words, melisma marks and phrase punctuation, in order
-    let tokens = lyric_tokens(&text.replace('’', "'"));
+    let italian = g2p.italian();
+    let tokens = lyric_tokens(&text.replace('’', "'"), italian);
     for tok in &tokens {
         if tok.chars().count() == 1 && tok.chars().all(is_lyric_punct) {
             if let Some(last) = out.last_mut() {
@@ -199,11 +275,14 @@ pub fn lyrics_to_syllables(text: &str, g2p: &impl WordSource) -> Vec<Syllable> {
         let parts: Vec<&str> = tok.split('-').filter(|p| !p.is_empty()).collect();
         let mut syls: Vec<Syllable> = Vec::new();
         for part in &parts {
-            let sy = syllabify_segments(&g2p.word(&part.to_lowercase(), false));
+            let segs = g2p.word(&part.to_lowercase(), false);
+            let sy = if italian { syllabify(&segs, italian_onset) } else { syllabify_segments(&segs) };
             let spell: Vec<String> = if parts.len() > 1 {
                 let mut v = vec![part.to_string()];
                 v.extend(std::iter::repeat_n("~".to_string(), sy.len().saturating_sub(1)));
                 v
+            } else if italian {
+                split_spelling_it(part, sy.len())
             } else {
                 split_spelling(part, sy.len())
             };

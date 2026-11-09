@@ -13,6 +13,7 @@ use chimera::creatures::{CREATURES, creature_by_id};
 use chimera::math::{js_max, js_min, js_round, log10};
 use chimera::phonetics::beatbox::{BEAT_PRESETS, BEAT_SOUNDS, BeatStep, beat_ready, parse_beat};
 use chimera::phonetics::english::EnglishG2P;
+use chimera::phonetics::italian::ItalianG2P;
 use chimera::phonetics::ipa::tokenize_ipa;
 use chimera::phonetics::planner::{
     PhraseInput, PlanOptions, plan_phrases, plan_utterance, vowel_table,
@@ -23,7 +24,7 @@ use chimera::phonetics::sing::{
 };
 use chimera::phonetics::songs::DEMO_SONGS;
 use chimera::phonetics::syllables::lyrics_to_syllables;
-use chimera::phonetics::{Intonation, Plan, Syllable};
+use chimera::phonetics::{Intonation, Lang, Plan, Syllable};
 use chimera::voice::human_voice::{HumanVoice, SCOPE_POINTS, SourcePatch, VoiceTelemetry};
 use std::io::Read;
 use std::time::Instant;
@@ -35,16 +36,28 @@ fn render_blocks(v: &mut HumanVoice, out: &mut [f32]) {
     }
 }
 
-/// The CMU dictionary (`public/data/cmudict.txt.gz`) loaded into a G2P.
-pub fn g2p() -> Result<EnglishG2P, String> {
-    let path = repo_path("public/data/cmudict.txt.gz");
+/// A gzipped file of the repo, as text.
+fn gunzip(rel: &str) -> Result<String, String> {
+    let path = repo_path(rel);
     let gz = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
     let mut text = String::new();
     flate2::read::GzDecoder::new(&gz[..])
         .read_to_string(&mut text)
         .map_err(|e| format!("{path}: {e}"))?;
+    Ok(text)
+}
+
+/// The CMU dictionary (`public/data/cmudict.txt.gz`) loaded into a G2P.
+pub fn g2p() -> Result<EnglishG2P, String> {
     let mut g = EnglishG2P::new();
-    g.load_dict(&text);
+    g.load_dict(&gunzip("public/data/cmudict.txt.gz")?);
+    Ok(g)
+}
+
+/// The Italian dictionary (`public/data/it-dict.txt.gz`) loaded into a G2P.
+pub fn g2p_it() -> Result<ItalianG2P, String> {
+    let mut g = ItalianG2P::new();
+    g.load_dict(&gunzip("public/data/it-dict.txt.gz")?);
     Ok(g)
 }
 
@@ -213,6 +226,7 @@ pub fn song(ctx: &Ctx, a: &[String]) -> Result<(), String> {
     let body_name = arg(a, 1, "male");
     let b = body(body_name)?;
     let g = g2p()?;
+    let it = g2p_it()?;
     let syl_text = |syl: &[Syllable]| {
         syl.iter()
             .map(|s| s.text.as_str())
@@ -221,7 +235,7 @@ pub fn song(ctx: &Ctx, a: &[String]) -> Result<(), String> {
     };
 
     for song in DEMO_SONGS {
-        let syl = lyrics_to_syllables(song.lyrics, &g);
+        let syl = if song.lang == Some(Lang::It) { lyrics_to_syllables(song.lyrics, &it) } else { lyrics_to_syllables(song.lyrics, &g) };
         let octave = match body_name {
             "female" => song.octave.female,
             "child" => song.octave.child,

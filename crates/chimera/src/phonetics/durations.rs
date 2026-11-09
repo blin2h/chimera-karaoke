@@ -81,6 +81,19 @@ pub struct SegInfo {
     pub dur: Option<f64>,
 }
 
+/// The vowel at `i` ends its syllable: a vowel follows, or one consonant (not a long one), or an
+/// obstruent + r/l or a consonant + glide that can start the next syllable.
+fn open_syllable(segs: &[Segment], inf: &[SegInfo], i: usize) -> bool {
+    let (c1, c2, v) = (segs.get(i + 1), segs.get(i + 2), inf.get(i + 3).is_some_and(|x| x.vowel));
+    let vowel_at = |k: usize| inf.get(k).is_some_and(|x| x.vowel);
+    match (c1, c2) {
+        _ if vowel_at(i + 1) => true,
+        (Some(c), _) if vowel_at(i + 2) => c.dur.is_none(),
+        (Some(_), Some(c2)) => v && matches!(c2.ipa.as_str(), "r" | "ɾ" | "l" | "j" | "w") && matches!(inf[i + 1].manner, Some(Manner::Stop | Manner::Fricative)),
+        _ => false,
+    }
+}
+
 /// Durations (s) for one phrase of segments (explicit `dur` values are kept).
 pub fn klatt_durations(segs: &[Segment], info: impl Fn(&Segment) -> SegInfo) -> Vec<f64> {
     let n = segs.len();
@@ -138,7 +151,14 @@ pub fn klatt_durations(segs: &[Segment], info: impl Fn(&Segment) -> SegInfo) -> 
                 if vowels_in_word.get(&word[i]).copied().unwrap_or(1) > 1 {
                     p *= 0.8; // polysyllabic shortening
                 }
-                if stress == 0 {
+                // Italian does not reduce unstressed vowels; a stressed vowel is long in an open
+                // syllable before the last ("ca-ro", "pa-dre", not "car-ro", "can-to")
+                let italian_long = s.italian() && stress > 0 && !word_final_syl && open_syllable(segs, &inf, i);
+                if s.italian() {
+                    if stress == 0 {
+                        p *= 0.85;
+                    }
+                } else if stress == 0 {
                     min *= 0.5; // unstressed: minimum halved, shortened
                     p *= 0.7;
                 }
@@ -166,8 +186,11 @@ pub fn klatt_durations(segs: &[Segment], info: impl Fn(&Segment) -> SegInfo) -> 
                 let mut d = min + (inh - min) * p;
                 // aspiration after a voiceless stop eats into a stressed vowel's onset: give it back
                 let pv = if i > 0 { Some(inf[i - 1]) } else { None };
-                if stress > 0 && pv.is_some_and(|pv| pv.manner == Some(Manner::Stop) && pv.voiced != Some(true)) {
+                if stress > 0 && !s.italian() && pv.is_some_and(|pv| pv.manner == Some(Manner::Stop) && pv.voiced != Some(true)) {
                     d += 20.0;
+                }
+                if italian_long {
+                    d *= 1.25;
                 }
                 return d / 1000.0;
             }

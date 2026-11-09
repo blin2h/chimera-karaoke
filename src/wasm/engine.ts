@@ -60,20 +60,25 @@ export function tokenizeIpa(text: string): Segment[] {
   return call("tokenizeIpa", { text });
 }
 
+export type Lang = "en" | "it";
+
 /**
- * English text → phonemes: CMUdict once loaded (fetched and gunzipped here, parsed by the
- * engine), letter-to-sound rules until then. One dictionary per page (the engine keeps it).
+ * Text → phonemes: the language's dictionary once loaded (fetched and gunzipped here, parsed by
+ * the engine; CMUdict for English, Wiktionary for Italian), spelling rules until then. One
+ * dictionary per language per page (the engine keeps it).
  */
-export class EnglishG2P {
+export class G2P {
   private loading: Promise<void> | null = null;
   private isLoaded = false;
+
+  constructor(readonly lang: Lang = "en") {}
 
   get loaded(): boolean {
     return this.isLoaded;
   }
 
   /** Load the gzipped dictionary ("word\tPHONES" lines). */
-  load(url = "/data/cmudict.txt.gz"): Promise<void> {
+  load(url = this.lang === "it" ? "/data/it-dict.txt.gz" : "/data/cmudict.txt.gz"): Promise<void> {
     if (this.isLoaded) return Promise.resolve();
     if (this.loading) return this.loading;
     this.loading = (async () => {
@@ -97,24 +102,31 @@ export class EnglishG2P {
   }
 
   setDictionaryText(text: string): void {
-    call("g2pLoad", { text });
+    call("g2pLoad", { text, lang: this.lang });
     this.isLoaded = true;
   }
 
   /** Text → phrases of segments. */
   toPhrases(text: string): Phrase[] {
-    return call("g2pPhrases", { text });
+    return call("g2pPhrases", { text, lang: this.lang });
   }
 
   /** One word → segments with lexical stress. `reduce`: weak forms of function words (speech). */
   word(w: string, reduce = true): Segment[] {
-    return call("g2pWord", { word: w, reduce });
+    return call("g2pWord", { word: w, reduce, lang: this.lang });
   }
 }
 
-/** Lyrics → sung syllables, through the page's dictionary (see EnglishG2P). */
-export function lyricsToSyllables(text: string): Syllable[] {
-  return call("lyricsToSyllables", { text });
+/** English (CMUdict). */
+export class EnglishG2P extends G2P {
+  constructor() {
+    super("en");
+  }
+}
+
+/** Lyrics → sung syllables, through the page's dictionary for the language (see G2P). */
+export function lyricsToSyllables(text: string, lang: Lang = "en"): Syllable[] {
+  return call("lyricsToSyllables", { text, lang });
 }
 
 // ------------------------------------------------------------------ planning

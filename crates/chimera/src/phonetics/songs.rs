@@ -1,5 +1,6 @@
 //! Demo melodies for Sing mode: [MIDI note, beats] per syllable, in the adult female register.
 
+use super::Lang;
 use serde::Serialize;
 
 /// octave shift per body
@@ -20,6 +21,9 @@ pub struct DemoSong {
     pub notes: &'static [[f64; 2]],
     /// octave shift per body
     pub octave: SongOctave,
+    /// the lyrics' language (unset: English)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<Lang>,
 }
 
 #[rustfmt::skip]
@@ -36,6 +40,7 @@ pub static DEMO_SONGS: &[DemoSong] = &[
             [64.0, 0.5], [62.0, 0.5], [60.0, 0.5], [59.0, 0.5], [57.0, 2.0],
         ],
         octave: SongOctave { male: -1.0, female: 0.0, child: 0.0 },
+        lang: None,
     },
     DemoSong {
         // traditional (public domain)
@@ -47,5 +52,24 @@ pub static DEMO_SONGS: &[DemoSong] = &[
             [65.0, 1.0], [65.0, 1.0], [64.0, 1.0], [64.0, 1.0], [62.0, 1.0], [62.0, 1.0], [60.0, 2.0],
         ],
         octave: SongOctave { male: -1.0, female: 0.0, child: 0.0 },
+        lang: None,
+    },
+    DemoSong {
+        // traditional (public domain), the Italian words to the "Frère Jacques" round
+        name: "Fra Martino",
+        bpm: 100.0,
+        lyrics: "Fra Martino, campanaro, dormi tu? Dormi tu? Suona le campane, suona le campane, din don dan, din don dan.",
+        notes: &[
+            [60.0, 1.0], [62.0, 1.0], [64.0, 1.0], [60.0, 1.0],
+            [60.0, 1.0], [62.0, 1.0], [64.0, 1.0], [60.0, 1.0],
+            [64.0, 1.0], [65.0, 1.0], [67.0, 2.0],
+            [64.0, 1.0], [65.0, 1.0], [67.0, 2.0],
+            [67.0, 0.5], [69.0, 0.5], [67.0, 0.5], [65.0, 0.5], [64.0, 1.0], [60.0, 1.0],
+            [67.0, 0.5], [69.0, 0.5], [67.0, 0.5], [65.0, 0.5], [64.0, 1.0], [60.0, 1.0],
+            [60.0, 1.0], [55.0, 1.0], [60.0, 2.0],
+            [60.0, 1.0], [55.0, 1.0], [60.0, 2.0],
+        ],
+        octave: SongOctave { male: -1.0, female: 0.0, child: 0.0 },
+        lang: Some(Lang::It),
     },
 ];

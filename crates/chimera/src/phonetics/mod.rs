@@ -1,4 +1,4 @@
-//! Phonetics: IPA, English G2P, syllables, durations, the gestural planner, singing, beatbox.
+//! Phonetics: IPA, English and Italian G2P, syllables, durations, the gestural planner, singing, beatbox.
 //! These run off the audio thread (they allocate); their output is a [`Plan`] of gestures that a
 //! voice plays.
 
@@ -10,6 +10,7 @@ pub mod durations;
 pub mod english;
 pub mod inventory;
 pub mod ipa;
+pub mod italian;
 pub mod planner;
 pub mod sing;
 pub mod songs;
@@ -33,6 +34,22 @@ pub struct Segment {
     /// word boundary after this segment
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word_end: Option<bool>,
+    /// the language it is said in (unset: English); the planner times and voices it to match
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<Lang>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lang {
+    En,
+    It,
+}
+
+impl Segment {
+    pub fn italian(&self) -> bool {
+        self.lang == Some(Lang::It)
+    }
 }
 
 impl Segment {

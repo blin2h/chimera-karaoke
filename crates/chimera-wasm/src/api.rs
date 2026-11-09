@@ -12,6 +12,7 @@ use chimera::phonetics::beatbox::{self, BeatStep};
 use chimera::phonetics::planner::{self, PhraseInput, PlanOptions};
 use chimera::phonetics::sing::{self, MelismaOptions, NoteOnOptions, SongOptions, SungNote};
 use chimera::phonetics::english::EnglishG2P;
+use chimera::phonetics::italian::ItalianG2P;
 use chimera::phonetics::{Segment, Syllable, ipa, songs, syllables, vowel_data};
 use chimera::voice::human_airway::HumanAirway;
 use serde_json::{Value, json};
@@ -33,6 +34,13 @@ struct State {
     next_model: usize,
     /// the page's English G2P (one dictionary, loaded once)
     g2p: EnglishG2P,
+    /// the page's Italian G2P (`lang: "it"` in the text calls)
+    it: ItalianG2P,
+}
+
+/// the text calls' language: `lang: "it"` for Italian, English otherwise
+fn italian(req: &Value) -> Result<bool, String> {
+    Ok(arg::<Option<String>>(req, "lang")?.as_deref() == Some("it"))
 }
 
 thread_local! {
@@ -119,12 +127,22 @@ fn dispatch(st: &mut State, req: &Value) -> Res {
         // ---------------------------------------------------------------- text → phonemes
         "tokenizeIpa" => to_json(&ipa::tokenize_ipa(&arg::<String>(req, "text")?)),
         "g2pLoad" => {
-            st.g2p.load_dict(&arg::<String>(req, "text")?);
+            let text = arg::<String>(req, "text")?;
+            if italian(req)? { st.it.load_dict(&text) } else { st.g2p.load_dict(&text) }
             Ok(json!(true))
         }
-        "g2pPhrases" => to_json(&st.g2p.to_phrases(&arg::<String>(req, "text")?)),
-        "g2pWord" => to_json(&st.g2p.word(&arg::<String>(req, "word")?, arg::<Option<bool>>(req, "reduce")?.unwrap_or(true))),
-        "lyricsToSyllables" => to_json(&syllables::lyrics_to_syllables(&arg::<String>(req, "text")?, &st.g2p)),
+        "g2pPhrases" => {
+            let text = arg::<String>(req, "text")?;
+            to_json(&if italian(req)? { st.it.to_phrases(&text) } else { st.g2p.to_phrases(&text) })
+        }
+        "g2pWord" => {
+            let (w, reduce) = (arg::<String>(req, "word")?, arg::<Option<bool>>(req, "reduce")?.unwrap_or(true));
+            to_json(&if italian(req)? { st.it.word(&w, reduce) } else { st.g2p.word(&w, reduce) })
+        }
+        "lyricsToSyllables" => {
+            let text = arg::<String>(req, "text")?;
+            to_json(&if italian(req)? { syllables::lyrics_to_syllables(&text, &st.it) } else { syllables::lyrics_to_syllables(&text, &st.g2p) })
+        }
         // ---------------------------------------------------------------- creatures
         "creaturePreview" => {
             let id: String = arg(req, "id")?;

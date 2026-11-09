@@ -1,0 +1,5 @@
+it-dict.txt.gz: Italian pronunciations from Wiktionary (https://en.wiktionary.org), extracted by
+kaikki.org (https://kaikki.org/dictionary/Italian/), reduced to word and IPA by tools/build-dict-it.ts.
+
+Wiktionary content is available under the Creative Commons Attribution-ShareAlike 4.0 License
+(https://creativecommons.org/licenses/by-sa/4.0/); this file is shared under the same licence.

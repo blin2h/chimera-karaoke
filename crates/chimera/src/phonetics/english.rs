@@ -117,63 +117,12 @@ impl EnglishG2P {
 
     /// The dictionary as text ("word\tPHONES" lines, i.e. `public/data/cmudict.txt.gz` gunzipped).
     pub fn load_dict(&mut self, text: &str) {
-        let mut m = HashMap::new();
-        for line in text.split('\n') {
-            if let Some(tab) = line.find('\t')
-                && tab > 0
-            {
-                m.insert(line[..tab].to_string(), line[tab + 1..].to_string());
-            }
-        }
-        self.dict = Some(m);
+        self.dict = Some(parse_dict(text));
     }
 
     /// Text → phrases of segments.
     pub fn to_phrases(&self, text: &str) -> Vec<Phrase> {
-        let mut phrases: Vec<Phrase> = Vec::new();
-        let normalized = expand_numbers(&text.replace('’', "'"));
-        // split on phrase punctuation, keeping the delimiter
-        let parts = split_keeping(&normalized, is_phrase_punct);
-        let mut words: Vec<String> = Vec::new();
-        let mut flush = |delim: &str, words: &mut Vec<String>| {
-            if words.is_empty() {
-                return;
-            }
-            let mut segs: Vec<Segment> = Vec::new();
-            // the words said: a token with no sound ("--", a lone apostrophe) is left out, so
-            // the n-th word ends at the n-th word end
-            let mut said: Vec<String> = Vec::new();
-            for w in words.iter() {
-                let mut ws = self.word(w, true);
-                let Some(last) = ws.last_mut() else { continue };
-                last.word_end = Some(true);
-                segs.append(&mut ws);
-                said.push(w.clone());
-            }
-            apply_allophones(&mut segs);
-            let q = delim.contains('?');
-            let pause = if delim.contains(['.', '!', '?']) {
-                0.35
-            } else if !delim.is_empty() {
-                0.18
-            } else {
-                0.3
-            };
-            words.clear();
-            if !segs.is_empty() {
-                phrases.push(Phrase { segments: segs, intonation: if q { Intonation::Question } else { Intonation::Statement }, pause, words: said });
-            }
-        };
-        for part in &parts {
-            if !part.is_empty() && part.chars().all(is_phrase_punct) {
-                flush(part, &mut words);
-            } else {
-                let lower = part.to_lowercase();
-                words.extend(lower.split(|c: char| !(c.is_ascii_lowercase() || c == '\'' || c == '-')).filter(|w| !w.is_empty()).map(str::to_string));
-            }
-        }
-        flush("", &mut words);
-        phrases
+        phrases(text, expand_numbers, |c| c.is_ascii_lowercase() || c == '\'' || c == '-', |w| self.word(w, true), apply_allophones)
     }
 
     /// One word → segments with lexical stress. `reduce`: weak forms of function words (speech).
@@ -210,6 +159,68 @@ impl WordSource for EnglishG2P {
     fn word(&self, w: &str, reduce: bool) -> Vec<Segment> {
         EnglishG2P::word(self, w, reduce)
     }
+}
+
+/// "word\tpronunciation" lines → map.
+pub(crate) fn parse_dict(text: &str) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    for line in text.split('\n') {
+        if let Some(tab) = line.find('\t')
+            && tab > 0
+        {
+            m.insert(line[..tab].to_string(), line[tab + 1..].to_string());
+        }
+    }
+    m
+}
+
+/// Text → phrases: digits spelled out (`numbers`), split at phrase punctuation, lowercased words
+/// (runs of `word_char`) said by `word`, then `allophones` over each phrase.
+pub(crate) fn phrases(text: &str, numbers: fn(&str) -> String, word_char: fn(char) -> bool, word: impl Fn(&str) -> Vec<Segment>, allophones: fn(&mut [Segment])) -> Vec<Phrase> {
+    let mut phrases: Vec<Phrase> = Vec::new();
+    let normalized = numbers(&text.replace('’', "'"));
+    // split on phrase punctuation, keeping the delimiter
+    let parts = split_keeping(&normalized, is_phrase_punct);
+    let mut words: Vec<String> = Vec::new();
+    let mut flush = |delim: &str, words: &mut Vec<String>| {
+        if words.is_empty() {
+            return;
+        }
+        let mut segs: Vec<Segment> = Vec::new();
+        // the words said: a token with no sound ("--", a lone apostrophe) is left out, so
+        // the n-th word ends at the n-th word end
+        let mut said: Vec<String> = Vec::new();
+        for w in words.iter() {
+            let mut ws = word(w);
+            let Some(last) = ws.last_mut() else { continue };
+            last.word_end = Some(true);
+            segs.append(&mut ws);
+            said.push(w.clone());
+        }
+        allophones(&mut segs);
+        let q = delim.contains('?');
+        let pause = if delim.contains(['.', '!', '?']) {
+            0.35
+        } else if !delim.is_empty() {
+            0.18
+        } else {
+            0.3
+        };
+        words.clear();
+        if !segs.is_empty() {
+            phrases.push(Phrase { segments: segs, intonation: if q { Intonation::Question } else { Intonation::Statement }, pause, words: said });
+        }
+    };
+    for part in &parts {
+        if !part.is_empty() && part.chars().all(is_phrase_punct) {
+            flush(part, &mut words);
+        } else {
+            let lower = part.to_lowercase();
+            words.extend(lower.split(|c: char| !word_char(c)).filter(|w| !w.is_empty()).map(str::to_string));
+        }
+    }
+    flush("", &mut words);
+    phrases
 }
 
 /// `s.split(/(<class>+)/)`: the pieces between runs of delimiter characters, with the runs.
@@ -322,14 +333,17 @@ fn js_integer_to_string(n: f64) -> String {
     format!("{n:e}").replacen('e', "e+", 1)
 }
 fn expand_numbers(t: &str) -> String {
+    // parseInt(d, 10): the correctly rounded double
+    expand_digits(t, |d| number_words(d.parse().expect("digits")))
+}
+/// Each run of digits → ` words(digits) `.
+pub(crate) fn expand_digits(t: &str, words: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(t.len());
     let mut digits = String::new();
     let emit = |digits: &mut String, out: &mut String| {
         if !digits.is_empty() {
-            // parseInt(d, 10): the correctly rounded double
-            let n: f64 = digits.parse().expect("digits");
             out.push(' ');
-            out.push_str(&number_words(n));
+            out.push_str(&words(digits));
             out.push(' ');
             digits.clear();
         }

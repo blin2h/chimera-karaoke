@@ -228,6 +228,8 @@ export interface DemoSong {
   lyrics: string;
   notes: [number, number][];
   octave: { male: number; female: number; child: number };
+  /** the lyrics' language (unset: English) */
+  lang?: "en" | "it";
 }
 
 export interface VowelRef {
