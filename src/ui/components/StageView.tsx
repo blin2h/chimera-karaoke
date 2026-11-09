@@ -1,70 +1,116 @@
 /**
- * The karaoke stage in 3D: a platform, the lead singer at the front, and one low-poly prop per
- * performer of the band where `performers()` placed it, each labelled with its instrument. A
- * performer glows while its channel sounds (drums flash on each hit); the singer glows while the
- * voice sings. Drag to orbit, wheel to zoom, double-click to go back to the audience's view.
- * Fills its parent, which needs a definite height.
+ * The karaoke stage in 3D, drawn like the head: glowing lines on black (the same beams kit,
+ * max-blended, fog-dimmed with depth), no solids, no lights. A platform outline with a faint
+ * grid, the lead singer at the front, and each performer of the band as a line drawing of its
+ * instrument where `performers()` placed it, labelled. A performer brightens and thickens while
+ * its channel sounds (drums flash on each hit); the singer while the voice sings. Drag to orbit,
+ * wheel to zoom, double-click to go back to the audience's view. Fills its parent, which needs a
+ * definite height.
  */
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { FAMILY_LABEL, type Family } from "../../audio/gm.ts";
 import { V } from "../colors.ts";
+import { Beams } from "../render/beams3d.ts";
 import { LISTENER, SINGER, type Performer } from "../stage.ts";
 import type { BandNote } from "../karaoke.ts";
 
 const FAMILY_COLOR: Record<Family, string> = {
   drums: V.red, bass: V.blue, piano: V.white, chromatic: V.white, organ: V.white, guitar: V.amber, ethnic: V.amber,
   strings: V.pink, ensemble: V.pink, brass: V.green, reed: V.green, pipe: V.green,
-  lead: V.blueMid, pad: V.blueMid, fx: V.blueMid, sfx: V.blueMid, percussive: V.blueMid,
+  lead: V.blue, pad: V.blue, fx: V.blue, sfx: V.blue, percussive: V.red,
 };
 const HOME = new THREE.Vector3(LISTENER.x, LISTENER.y + 9, LISTENER.z - 1.5);
 const TARGET = new THREE.Vector3(0, 0.5, -2.8);
 
-const mat = (color: string) => new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.35), emissive: color, emissiveIntensity: 0.15, roughness: 0.6 });
-
-function mesh(geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number, rx = 0, rz = 0): THREE.Mesh {
-  const o = new THREE.Mesh(geo, m);
-  o.position.set(x, y, z);
-  o.rotation.set(rx, 0, rz);
-  return o;
+// ---- line drawings, in metres, facing +z (the audience), standing on y = 0
+type Shape = number[][]; // polylines of xyz triples
+const ring = (r: number, at: (x: number, y: number) => [number, number, number], n = 20): number[] => {
+  const out: number[] = [];
+  for (let i = 0; i <= n; i++) out.push(...at(r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n)));
+  return out;
+};
+/** a ring lying flat at height y */
+const flat = (cx: number, y: number, cz: number, r: number, n?: number) => ring(r, (a, b) => [cx + a, y, cz + b], n);
+/** a ring standing up, facing the audience */
+const upright = (cx: number, cy: number, cz: number, r: number, n?: number) => ring(r, (a, b) => [cx + a, cy + b, cz], n);
+const seg = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => [x0, y0, z0, x1, y1, z1];
+/** a drum: two flat rings joined at four points */
+const drum = (cx: number, y: number, cz: number, r: number, h: number): Shape => [
+  flat(cx, y, cz, r), flat(cx, y + h, cz, r),
+  ...[0, 1, 2, 3].map((k) => seg(cx + r * Math.cos(k * 1.571 + 0.785), y, cz + r * Math.sin(k * 1.571 + 0.785), cx + r * Math.cos(k * 1.571 + 0.785), y + h, cz + r * Math.sin(k * 1.571 + 0.785))),
+];
+/** a box's twelve edges */
+const box = (cx: number, cy: number, cz: number, w: number, h: number, d: number): Shape => {
+  const [x0, x1, y0, y1, z0, z1] = [cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2, cz - d / 2, cz + d / 2];
+  return [
+    [x0, y0, z0, x1, y0, z0, x1, y0, z1, x0, y0, z1, x0, y0, z0],
+    [x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, x0, y1, z0],
+    seg(x0, y0, z0, x0, y1, z0), seg(x1, y0, z0, x1, y1, z0), seg(x1, y0, z1, x1, y1, z1), seg(x0, y0, z1, x0, y1, z1),
+  ];
+};
+/** a stand: a pole and three feet */
+const stand = (cx: number, cz: number, h: number): Shape => [seg(cx, 0, cz, cx, h, cz), ...[0, 2.09, 4.19].map((a) => seg(cx, 0.12, cz, cx + 0.25 * Math.cos(a), 0, cz + 0.25 * Math.sin(a)))];
+/** a person, simply: head, body, arms */
+const person = (s: number): Shape => [
+  upright(0, 1.55 * s, 0, 0.15 * s, 16),
+  [-0.12 * s, 0, 0, -0.08 * s, 0.75 * s, 0, 0, 1.38 * s, 0, 0.08 * s, 0.75 * s, 0, 0.12 * s, 0, 0],
+  [-0.32 * s, 0.85 * s, 0.05, -0.2 * s, 1.15 * s, 0, 0, 1.3 * s, 0, 0.2 * s, 1.15 * s, 0, 0.32 * s, 0.85 * s, 0.05],
+];
+/** a guitar-like body outline, upright, rotated by `tilt`, neck of length `neck` */
+function stringed(scale: number, neck: number, tilt: number, h: number): Shape {
+  const c = Math.cos(tilt), s = Math.sin(tilt);
+  const r = ([x, y]: [number, number]): [number, number, number] => [x * c - y * s, h + x * s + y * c, 0];
+  const body: number[] = [];
+  for (let i = 0; i <= 32; i++) {
+    const a = (2 * Math.PI * i) / 32;
+    // a waisted outline: wide below, narrower above
+    const y = 0.32 * scale * Math.sin(a);
+    const w = (0.2 + 0.07 * Math.cos(2 * a) - 0.05 * Math.sin(a)) * scale;
+    body.push(...r([w * Math.cos(a), y]));
+  }
+  return [body, [...r([-0.03, 0.3 * scale]), ...r([-0.03, 0.3 * scale + neck]), ...r([0.03, 0.3 * scale + neck]), ...r([0.03, 0.3 * scale])], [...r([0, -0.25 * scale]), ...r([0, 0.3 * scale + neck])]];
 }
 
-/** a small stylized figure: body, head */
-function figure(m: THREE.Material, scale = 1): THREE.Group {
-  const g = new THREE.Group();
-  g.add(mesh(new THREE.CapsuleGeometry(0.22, 0.8, 4, 10), m, 0, 0.62, 0), mesh(new THREE.SphereGeometry(0.17, 14, 10), m, 0, 1.36, 0));
-  g.scale.setScalar(scale);
-  return g;
-}
-
-/** the prop a family plays on */
-function prop(family: Family, voice: boolean, m: THREE.Material): THREE.Group {
-  if (voice) return figure(m, 0.85);
-  const g = new THREE.Group();
-  const cyl = (r: number, h: number) => new THREE.CylinderGeometry(r, r, h, 18);
-  const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+function drawing(family: Family, voice: boolean): Shape {
+  if (voice) return person(0.85);
   switch (family) {
     case "drums":
-      g.add(mesh(cyl(0.38, 0.32), m, 0, 0.4, 0, Math.PI / 2), mesh(cyl(0.2, 0.2), m, -0.45, 0.75, 0.15), mesh(cyl(0.22, 0.22), m, 0.45, 0.75, 0.15), mesh(cyl(0.3, 0.02), m, -0.75, 1.15, -0.1), mesh(cyl(0.32, 0.02), m, 0.8, 1.2, -0.1));
-      break;
-    case "piano": case "chromatic": case "organ":
-      g.add(mesh(box(1.3, 0.12, 0.45), m, 0, 0.85, 0), mesh(box(0.08, 0.8, 0.3), m, -0.55, 0.4, 0), mesh(box(0.08, 0.8, 0.3), m, 0.55, 0.4, 0));
-      break;
-    case "guitar": case "bass": case "ethnic":
-      g.add(mesh(box(0.38, 0.48, 0.08), m, 0, 0.75, 0, 0, 0.35), mesh(box(0.06, family === "bass" ? 0.95 : 0.75, 0.04), m, 0.22, 1.3, 0, 0, 0.35));
-      break;
-    case "strings": case "ensemble":
-      g.add(mesh(new THREE.CapsuleGeometry(0.2, 0.7, 4, 10), m, 0, 0.7, 0), mesh(box(0.04, 0.6, 0.04), m, 0, 1.35, 0));
-      break;
-    case "brass": case "reed": case "pipe":
-      g.add(mesh(new THREE.ConeGeometry(0.2, 0.8, 16, 1, true), m, 0, 1, 0, Math.PI / 2.4), mesh(cyl(0.03, 0.9), m, 0, 0.45, 0));
-      break;
+      return [
+        upright(0, 0.38, 0.1, 0.36), upright(0, 0.38, -0.25, 0.36), seg(-0.36, 0.38, 0.1, -0.36, 0.38, -0.25), seg(0.36, 0.38, 0.1, 0.36, 0.38, -0.25),
+        ...drum(-0.45, 0.62, 0.1, 0.18, 0.18), ...drum(0.4, 0.66, 0.05, 0.2, 0.2), ...drum(0.75, 0.45, 0.3, 0.24, 0.3),
+        flat(-0.8, 1.12, -0.05, 0.3), flat(0.95, 1.2, -0.2, 0.32), ...stand(-0.8, -0.05, 1.12), ...stand(0.95, -0.2, 1.2),
+      ];
+    case "piano":
+    case "organ":
+    case "chromatic": {
+      const keys = Array.from({ length: 14 }, (_, k) => seg(-0.6 + k * 0.0923, 0.91, 0.22, -0.6 + k * 0.0923, 0.91, 0.06));
+      return [...box(0, 0.85, 0, 1.3, 0.12, 0.45), ...keys, seg(-0.55, 0, 0, -0.55, 0.79, 0), seg(0.55, 0, 0, 0.55, 0.79, 0), ...(family === "organ" ? box(0, 1.15, -0.18, 1.3, 0.5, 0.08) : [])];
+    }
+    case "guitar":
+    case "ethnic":
+      return [...stringed(1, 0.55, -0.45, 0.9), ...stand(0.05, -0.05, 0.6)];
+    case "bass":
+      return [...stringed(1.05, 0.8, -0.4, 0.85), ...stand(0.05, -0.05, 0.55)];
+    case "strings":
+    case "ensemble":
+      return [...stringed(1.6, 0.55, 0, 0.62), seg(0, 0, 0, 0, 0.12, 0), seg(-0.3, 0.55, 0.15, 0.35, 0.95, 0.15)]; // a cello, its bow
+    case "brass":
+    case "reed":
+    case "pipe":
+      // a bell on a stand: the bell's ring, its flare to the mouthpiece
+      return [upright(0.35, 1.0, 0.1, 0.17), ...[0, 1.571, 3.142, 4.712].map((a) => seg(0.35 + 0.17 * Math.cos(a), 1.0 + 0.17 * Math.sin(a), 0.1, -0.35, 1.0, 0.1)), seg(-0.35, 1.0, 0.1, -0.45, 1.05, 0.1), ...stand(0, 0.1, 0.95)];
+    case "percussive":
+      return [...drum(-0.22, 0.55, 0, 0.17, 0.25), ...drum(0.2, 0.55, 0, 0.2, 0.25), ...stand(0, 0, 0.55)];
     default:
-      g.add(mesh(cyl(0.3, 0.7), m, 0, 0.35, 0), mesh(box(0.5, 0.15, 0.4), m, 0, 0.78, 0));
+      // a synth on an X stand
+      return [...box(0, 0.95, 0, 1.0, 0.08, 0.35), seg(-0.4, 0, 0.12, 0.4, 0.9, -0.12), seg(0.4, 0, 0.12, -0.4, 0.9, -0.12), ...Array.from({ length: 10 }, (_, k) => seg(-0.45 + k * 0.1, 1.0, 0.16, -0.45 + k * 0.1, 1.0, 0.03))];
   }
-  return g;
 }
+
+/** the singer: a person behind a mic stand */
+const SINGER_DRAWING: Shape = [...person(1), seg(0, 0, 0.42, 0, 1.38, 0.42), seg(0, 1.38, 0.42, 0, 1.45, 0.3), upright(0, 1.47, 0.28, 0.04, 10), ...stand(0, 0.42, 0.12)];
 
 /** a two-line label (instrument, family) on a canvas texture */
 function label(name: string, sub: string, color: string): THREE.Sprite {
@@ -109,6 +155,24 @@ function level(lane: Lane, t: number): number {
   return lit;
 }
 
+/** drawings are drawn larger than life, to read from the audience */
+const SCALE = 1.4;
+
+/** a drawing placed on the stage: scaled, turned to face the listener, moved to (x, z) */
+function place(shape: Shape, x: number, z: number): Float32Array[] {
+  const a = Math.atan2(LISTENER.x - x, LISTENER.z - z);
+  const c = Math.cos(a), s = Math.sin(a);
+  return shape.map((l) => {
+    const out = new Float32Array(l.length);
+    for (let i = 0; i < l.length; i += 3) {
+      out[i] = x + SCALE * (l[i] * c + l[i + 2] * s);
+      out[i + 1] = SCALE * l[i + 1];
+      out[i + 2] = z + SCALE * (-l[i] * s + l[i + 2] * c);
+    }
+    return out;
+  });
+}
+
 export function StageView(props: { performers: Performer[]; notes: BandNote[]; time: () => number | null; singerActive: () => boolean }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef(props.time);
@@ -129,12 +193,12 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
       return;
     }
     gl.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    gl.setClearColor(0x000000, 1);
     wrap.appendChild(gl.domElement);
     gl.domElement.style.display = "block";
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color("#02070b");
-    scene.fog = new THREE.Fog("#02070b", 12, 26);
+    scene.fog = new THREE.Fog(0x000000, 10, 30);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 60);
     camera.position.copy(HOME);
     const controls = new OrbitControls(camera, gl.domElement);
@@ -144,12 +208,12 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     controls.minDistance = 3;
     controls.maxDistance = 32;
     controls.update();
-    // the view from the audience: back along HOME's direction until the whole stage (floor and
-    // labels) fits the frame, whatever the screen's shape
+    // the view from the audience: back along HOME's direction until the performers and their
+    // labels fit the frame, whatever the screen's shape
     const xs = [SINGER.x, ...performers.map((p) => p.x)];
     const zs = [SINGER.z, ...performers.map((p) => p.z)];
     const [x0, x1, z0] = [Math.min(...xs) - 1.4, Math.max(...xs) + 1.4, Math.min(...zs) - 1];
-    const corners = [x0, x1].flatMap((x) => [0.4, z0].flatMap((z) => [new THREE.Vector3(x, 0, z), new THREE.Vector3(x, 2.6 - z * 0.22, z)]));
+    const corners = [x0, x1].flatMap((x) => [0.4, z0].flatMap((z) => [new THREE.Vector3(x, 0, z), new THREE.Vector3(x, 3.1 - z * 0.22, z)]));
     const dir = HOME.clone().sub(TARGET).normalize();
     const fit = (target: THREE.Vector3) => {
       for (let d = 4; d <= 30; d += 0.25) {
@@ -177,28 +241,18 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     };
     gl.domElement.addEventListener("dblclick", reset);
 
-    // the platform, its front edge at z = 0, and the lights
-    const floorGeo = new THREE.BoxGeometry(14, 0.4, 8);
-    const floor = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ color: "#071722", roughness: 0.9 }));
-    floor.position.set(0, -0.2, -4);
-    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(floorGeo), new THREE.LineBasicMaterial({ color: V.blueDim }));
-    edge.position.copy(floor.position);
-    scene.add(floor, edge, new THREE.AmbientLight("#9fd8ff", 0.35));
-    for (const x of [-4, 0, 4]) {
-      const spot = new THREE.SpotLight("#ffffff", 30, 16, Math.PI / 7, 0.6);
-      spot.position.set(x, 7, 2);
-      spot.target.position.set(x * 0.6, 0, -3);
-      scene.add(spot, spot.target);
-    }
+    const beams = new Beams();
+    scene.add(beams.group);
+    // the platform: its outline (front edge at z = 0) and a faint metre grid
+    const floor: Float32Array[] = [new Float32Array([-7, 0, 0, 7, 0, 0, 7, 0, -8, -7, 0, -8, -7, 0, 0]), new Float32Array([-7, -0.4, 0, 7, -0.4, 0]), new Float32Array([-7, 0, 0, -7, -0.4, 0]), new Float32Array([7, 0, 0, 7, -0.4, 0])];
+    const grid: Float32Array[] = [];
+    for (let x = -6; x <= 6; x++) grid.push(new Float32Array([x, 0, 0, x, 0, -8]));
+    for (let z = -1; z >= -7; z--) grid.push(new Float32Array([-7, 0, z, 7, 0, z]));
 
-    // the singer, with a mic stand
-    const singerMat = mat(V.amber);
-    const singer = figure(singerMat);
-    singer.add(mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.3, 8), singerMat, 0, 0.65, 0.35), mesh(new THREE.SphereGeometry(0.06, 10, 8), singerMat, 0, 1.32, 0.35));
-    singer.position.set(SINGER.x, 0, SINGER.z);
+    const singer = place(SINGER_DRAWING, SINGER.x, SINGER.z);
     const singerLabel = label("Voce", "Solista", V.amber);
-    singerLabel.position.set(SINGER.x, 1.75, SINGER.z);
-    scene.add(singer, singerLabel);
+    singerLabel.position.set(SINGER.x, 2.75, SINGER.z);
+    scene.add(singerLabel);
 
     // the band
     const lanes = new Map<number, Lane>();
@@ -209,20 +263,18 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     }
     // labels rise toward the back, and neighbours take turns a step higher, so none hides another
     const lit = performers.map((p, k) => {
-      const m = mat(FAMILY_COLOR[p.family]);
-      const g = prop(p.family, p.voice, m);
-      g.position.set(p.x, 0, p.z);
-      g.lookAt(LISTENER.x, 0, LISTENER.z);
-      const tag = label(p.name, p.voice ? "Voce" : FAMILY_LABEL[p.family], FAMILY_COLOR[p.family]);
-      tag.position.set(p.x, 1.9 - p.z * 0.22 + (k % 2) * 0.42, p.z);
-      scene.add(g, tag);
-      return { m, g, lane: lanes.get(p.channel), glow: 0 };
+      const color = FAMILY_COLOR[p.family];
+      const tag = label(p.name, p.voice ? "Voce" : FAMILY_LABEL[p.family], color);
+      tag.position.set(p.x, 2.4 - p.z * 0.22 + (k % 2) * 0.42, p.z);
+      scene.add(tag);
+      return { lines: place(drawing(p.family, p.voice), p.x, p.z), color, lane: lanes.get(p.channel), glow: 0 };
     });
 
     const resize = () => {
       const w = wrap.clientWidth || 1;
       const h = wrap.clientHeight || 1;
       gl.setSize(w, h);
+      beams.setResolution(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       reset();
@@ -236,15 +288,17 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const t = timeRef.current();
+      beams.begin();
+      for (const l of floor) beams.line(l, l.length / 3, V.blueMid, 1.05);
+      for (const l of grid) beams.line(l, 2, V.blueDim, 0.6, { alpha: 0.45 });
       for (const p of lit) {
-        const target = t === null || !p.lane ? 0 : level(p.lane, t);
         // light comes on at once and fades out
-        p.glow = Math.max(target, p.glow * 0.88);
-        p.m.emissiveIntensity = 0.15 + 1.6 * p.glow;
-        p.g.scale.setScalar(1 + 0.06 * p.glow);
+        p.glow = Math.max(t === null || !p.lane ? 0 : level(p.lane, t), p.glow * 0.88);
+        for (const l of p.lines) beams.line(l, l.length / 3, p.color, 0.85 + 0.9 * p.glow, { alpha: 0.4 + 0.6 * p.glow, hot: p.glow > 0.5 });
       }
       singerGlow = Math.max(singerRef.current() ? 1 : 0, singerGlow * 0.9);
-      singerMat.emissiveIntensity = 0.2 + 1.4 * singerGlow;
+      for (const l of singer) beams.line(l, l.length / 3, V.amber, 1.05 + 0.8 * singerGlow, { alpha: 0.55 + 0.45 * singerGlow, hot: singerGlow > 0.5 });
+      beams.end();
       controls.update();
       gl.render(scene, camera);
     };
@@ -255,12 +309,12 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
       ro.disconnect();
       gl.domElement.removeEventListener("dblclick", reset);
       controls.dispose();
+      beams.dispose();
       scene.traverse((o) => {
-        const x = o as THREE.Mesh;
-        x.geometry?.dispose();
-        for (const m of Array.isArray(x.material) ? x.material : x.material ? [x.material] : []) {
-          (m as THREE.SpriteMaterial).map?.dispose();
-          m.dispose();
+        const sp = o as THREE.Sprite;
+        if (sp.isSprite) {
+          sp.material.map?.dispose();
+          sp.material.dispose();
         }
       });
       gl.dispose();
