@@ -151,6 +151,27 @@ describe("parseKaraoke", () => {
     expect(song.band[0].velocity).toBeCloseTo(100 / 127, 6);
   });
 
+  test("a type 0 file: the melody is a channel of the one track, the band its other channels", () => {
+    const song = parseKaraoke(
+      midi(0, [
+        at([
+          [0, tempo(500000)],
+          [0, lyric("Do ")],
+          [480, lyric("re ")],
+          [960, lyric("mi")],
+          ...note(60, 0, 480, 3),
+          ...note(62, 480, 480, 3),
+          ...note(64, 960, 480, 3),
+          // a busier accompaniment on another channel of the same track
+          ...[48, 52, 55, 48, 52, 55].flatMap((p, i) => note(p, i * 240, 200, 0)),
+        ]),
+      ]),
+    );
+    expect(song.notes.map((n) => n[0])).toEqual([60, 62, 64]);
+    expect(song.words?.map((w) => w.parts[0])).toEqual(["Do", "re", "mi"]);
+    expect(new Set(song.band.map((n) => n.channel))).toEqual(new Set([0]));
+  });
+
   test("a rest splits the singing into stretches", () => {
     expect(singingSpans([[0, 0.5], [0.5, 1], [1.1, 1.5], [3, 4], [4, 5]])).toEqual([[0, 3], [3, 5]]);
     expect(singingSpans([])).toEqual([]);

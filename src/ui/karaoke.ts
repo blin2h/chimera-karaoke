@@ -309,7 +309,10 @@ export function parseKaraoke(data: ArrayBuffer | Uint8Array, fileName?: string):
   const events = syllableEvents(tracks);
   const tol = Math.round(division / 8); // a 32nd note
   const lead = Math.round(division / 4); // a 16th
-  const melody = pickMelody(tracks, events.map(([t]) => t), tol, lead);
+  // the melody is one channel of one track: a type 0 file (most karaoke MIDI) has every
+  // instrument in a single track, told apart only by channel
+  const parts: RawTrack[] = tracks.flatMap((t) => [...new Set(t.notes.map((n) => n.channel))].map((ch) => ({ ...t, notes: t.notes.filter((n) => n.channel === ch) })));
+  const melody = pickMelody(parts, events.map(([t]) => t), tol, lead);
   let notes = monophonize(melody.notes.filter((n) => n.channel !== 9), tol);
   if (!notes.length) throw new MidiError("no notes to sing in this file");
 
@@ -369,7 +372,7 @@ export function parseKaraoke(data: ArrayBuffer | Uint8Array, fileName?: string):
   };
   const program = setting("programs", 0);
   const volume = setting("volumes", 100);
-  const band: BandNote[] = tracks
+  const band: BandNote[] = parts
     .filter((t) => t !== melody)
     .flatMap((t) => t.notes)
     .filter((n) => n.end > n.start)
