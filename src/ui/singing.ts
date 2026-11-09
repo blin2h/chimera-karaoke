@@ -287,6 +287,7 @@ export async function playDemo(name: string, body: BodyMix, ready?: () => Promis
  * song can start `from` any second (the karaoke player's timeline).
  */
 export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>, o: { space?: BandSpace; timed?: boolean; from?: number } = {}): Promise<void> {
+  imported = { song, o };
   const l = lang();
   const words = song.words;
   const bandOn = useSing.getState().band && song.band.length > 0;
@@ -383,6 +384,30 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
   useSing.setState({ lyrics: song.lyrics, syllables: syl, cursor: 0, demo: song.name, demoAt: -1 });
   // nothing left to sing (a start past the last syllable): no plan comes back, the clock starts now
   if (!plan.segments.length) begin(demoRun, (engine.voiceClock() ?? 0) + 0.03);
+}
+
+/** the last imported song and how it was played (to sing on with another voice) */
+let imported: { song: KaraokeSong; o: { space?: BandSpace; timed?: boolean } } | null = null;
+
+/**
+ * Before the voice changes: if an imported song is playing on its own clock, a function that
+ * sings it on with the new body from where it was. The new voice's clock starts again from zero,
+ * so the score waits for its first report; a stop meanwhile cancels it.
+ */
+export function singOnAfterBodyChange(): ((body: BodyMix) => void) | null {
+  const t = songTime();
+  const im = imported;
+  if (t === null || !im) return null;
+  return (body) => {
+    const token = demoToken;
+    const before = engine.latest;
+    const go = (frames: number) => {
+      if (token !== demoToken) return;
+      if (engine.latest !== before || frames > 60) void playImported(im.song, body, undefined, { ...im.o, from: Math.max(0, t) });
+      else requestAnimationFrame(() => go(frames + 1));
+    };
+    go(0);
+  };
 }
 
 /** the band's level (0–1.5), kept across songs */

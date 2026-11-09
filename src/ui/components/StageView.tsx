@@ -19,8 +19,14 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { FAMILY_LABEL, type Family } from "../../audio/gm.ts";
 import { V } from "../colors.ts";
 import { Beams } from "../render/beams3d.ts";
-import { LISTENER, SINGER, type Performer } from "../stage.ts";
+import { Anatomy3D } from "../render/anatomy3d.ts";
+import { footprint, LISTENER, ROW, ROW_DEPTH, SCALE, SINGER, SPREAD, type Performer } from "../stage.ts";
 import type { BandNote } from "../karaoke.ts";
+import { useModel } from "../useModel.ts";
+import { useStore } from "../store.ts";
+import { sameBody, type BodyMix } from "../body.ts";
+import { VoiceModel } from "../analysis.ts";
+import { engine } from "../../audio/AudioEngine.ts";
 
 const FAMILY_COLOR: Record<Family, string> = {
   drums: V.red, bass: V.blue, piano: V.white, chromatic: V.white, organ: V.white, guitar: V.amber, ethnic: V.amber,
@@ -29,12 +35,8 @@ const FAMILY_COLOR: Record<Family, string> = {
 };
 const HOME = new THREE.Vector3(LISTENER.x, LISTENER.y + 9, LISTENER.z - 1.5);
 const TARGET = new THREE.Vector3(0, 0.5, -2.8);
-/** drawings are drawn larger than life, to read from the audience */
-const SCALE = 1.4;
-/** section players stand this far apart (drawing units), three to a row, each row further back */
-const SPREAD = 0.65;
-const ROW = 3;
-const ROW_DEPTH = 0.6;
+/** the singer's height against an adult man's (the body's mix of male, female and child) */
+const sizeOf = (b: BodyMix) => (1 - 0.07 * b.female) * (1 - 0.32 * b.child);
 
 // ---- static line drawings, in drawing units (metres before SCALE), facing +z (the audience)
 // standing on y = 0. A figure facing +z has its right hand on −x.
@@ -340,6 +342,8 @@ class Pen {
   /** the section player's offset, in the performer's drawing units */
   dx = 0;
   dz = 0;
+  /** the figure's height against an adult's (the lead singer's body) */
+  size = 1;
   /** face the audience from (x, z) */
   at(x: number, z: number): void {
     const a = Math.atan2(LISTENER.x - x, LISTENER.z - z);
@@ -351,11 +355,12 @@ class Pen {
   p(x: number, y: number, z: number): this {
     if (this.n >= 64) return this;
     const i = 3 * this.n++;
+    const k = SCALE * this.size;
     x += this.dx;
     z += this.dz;
-    this.a[i] = this.ox + SCALE * (x * this.c + z * this.s);
-    this.a[i + 1] = SCALE * y;
-    this.a[i + 2] = this.oz + SCALE * (-x * this.s + z * this.c);
+    this.a[i] = this.ox + k * (x * this.c + z * this.s);
+    this.a[i + 1] = k * y;
+    this.a[i + 2] = this.oz + k * (-x * this.s + z * this.c);
     return this;
   }
   v(q: ArrayLike<number>): this {
@@ -670,6 +675,7 @@ function drawMusician(b: Beams, pen: Pen, pl: Player, lane: Lane | undefined, t:
     pen.stroke(b, color, 0.85, 0.5 + 0.5 * glow);
   }
 
+  if (pl.kind === "singer") return drawBody(b, pen, hy, hz, glow);
   // the figure: head, torso, arms across the shoulders, legs across the hips
   const fa = 0.4 + 0.45 * glow;
   const fw = 0.85 + 0.5 * glow;
@@ -683,6 +689,57 @@ function drawMusician(b: Beams, pen: Pen, pl: Player, lane: Lane | undefined, t:
   }
 }
 
+const R0 = v3(), R1 = v3();
+/**
+ * A limb or the trunk drawn as the head is: rings across it and lines along it, from a to c,
+ * `r(k)` its half-width k of the way along (`deep` × that front to back).
+ */
+function tube(b: Beams, pen: Pen, a: number[], c: number[], r: (k: number) => number, rings: number, deep: number, glow: number): void {
+  const dx = c[0] - a[0], dy = c[1] - a[1], dz = c[2] - a[2];
+  const L = Math.hypot(dx, dy, dz) || 1e-6;
+  const [ux, uy, uz] = [dx / L, dy / L, dz / L];
+  // across: square to the axis and to front–back (the body's side), else to up
+  let [e1x, e1y, e1z] = [uy, -ux, 0];
+  if (Math.hypot(e1x, e1y) < 0.3) [e1x, e1y, e1z] = [0, uz, -uy];
+  const l1 = Math.hypot(e1x, e1y, e1z);
+  [e1x, e1y, e1z] = [e1x / l1, e1y / l1, e1z / l1];
+  const [e2x, e2y, e2z] = [uy * e1z - uz * e1y, uz * e1x - ux * e1z, ux * e1y - uy * e1x];
+  const at = (k: number, ang: number, o: number[]) => {
+    const rr = r(k), cu = Math.cos(ang) * rr, su = Math.sin(ang) * rr * deep;
+    return set(o, a[0] + dx * k + cu * e1x + su * e2x, a[1] + dy * k + cu * e1y + su * e2y, a[2] + dz * k + cu * e1z + su * e2z);
+  };
+  const ringAlpha = 0.35 + 0.4 * glow, lineAlpha = 0.55 + 0.45 * glow;
+  for (let i = 0; i <= rings; i++) {
+    for (let j = 0; j <= 14; j++) pen.v(at(i / rings, (2 * Math.PI * j) / 14, R0));
+    pen.stroke(b, V.blueDim, 0.9, ringAlpha);
+  }
+  for (let j = 0; j < 4; j++) {
+    for (let i = 0; i <= rings; i++) pen.v(at(i / rings, (Math.PI / 2) * j, R1));
+    pen.stroke(b, V.blueMid, 1.0, lineAlpha, glow > 0.6);
+  }
+}
+
+const [WAIST, CHEST, HIPL, HIPR] = Array.from({ length: 4 }, v3);
+/** the lead singer's body in the head's drawing style (the head itself is the voice's, mounted
+ *  on the neck); joints from drawMusician, hips at height hy, depth hz */
+function drawBody(b: Beams, pen: Pen, hy: number, hz: number, glow: number): void {
+  set(WAIST, lerp(HIP[0], NECK[0], 0.35), lerp(HIP[1], NECK[1], 0.35), lerp(HIP[2], NECK[2], 0.35));
+  set(CHEST, lerp(HIP[0], NECK[0], 0.7), lerp(HIP[1], NECK[1], 0.7), lerp(HIP[2], NECK[2], 0.7));
+  set(HIPL, 0.09, hy, hz);
+  set(HIPR, -0.09, hy, hz);
+  tube(b, pen, HIP, WAIST, (k) => 0.17 - 0.035 * k, 2, 0.62, glow);
+  tube(b, pen, WAIST, CHEST, (k) => 0.135 + 0.04 * k, 2, 0.65, glow);
+  tube(b, pen, CHEST, NECK, (k) => 0.175 + 0.025 * Math.sin(Math.PI * k * 0.8) - 0.1 * k * k, 2, 0.6, glow);
+  for (const [s, e, h] of [[SHL, EL, HL], [SHR, ER, HR]]) {
+    tube(b, pen, s, e, (k) => 0.05 - 0.01 * k, 3, 1, glow);
+    tube(b, pen, e, h, (k) => 0.04 - 0.012 * k, 3, 1, glow);
+  }
+  for (const [hp, kn, ft] of [[HIPL, KL, FL], [HIPR, KR, FR]]) {
+    tube(b, pen, hp, kn, (k) => 0.075 - 0.025 * k, 3, 1, glow);
+    tube(b, pen, kn, ft, (k) => 0.05 - 0.015 * k, 3, 1, glow);
+  }
+}
+
 export function StageView(props: { performers: Performer[]; notes: BandNote[]; time: () => number | null; singerActive: () => boolean }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef(props.time);
@@ -690,6 +747,7 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
   const singerRef = useRef(props.singerActive);
   singerRef.current = props.singerActive;
   const [failed, setFailed] = useState(false);
+  const modelRef = useModel();
   const { performers, notes } = props;
 
   useEffect(() => {
@@ -723,9 +781,9 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     const xs: number[] = [SINGER.x - 1, SINGER.x + 1];
     const zs: number[] = [SINGER.z];
     for (const p of performers) {
-      const half = (((Math.min(ROW, p.players) - 1) / 2) * SPREAD + 0.6) * SCALE;
-      xs.push(p.x - half, p.x + half);
-      zs.push(p.z - (Math.ceil(p.players / ROW) - 1) * ROW_DEPTH * SCALE - 0.8);
+      const f = footprint(p);
+      xs.push(p.x - f.half, p.x + f.half);
+      zs.push(p.z - f.back);
     }
     const [x0, x1, z0] = [Math.min(...xs) - 0.6, Math.max(...xs) + 0.6, Math.min(...zs) - 0.4];
     const corners = [x0, x1].flatMap((x) => [0.4, z0].flatMap((z) => [new THREE.Vector3(x, 0, z), new THREE.Vector3(x, 3.6 - z * 0.22, z)]));
@@ -759,15 +817,33 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
     const beams = new Beams();
     scene.add(beams.group);
     // the platform: its outline (front edge at z = 0) and a faint metre grid
-    const floor: Float32Array[] = [new Float32Array([-7, 0, 0, 7, 0, 0, 7, 0, -8, -7, 0, -8, -7, 0, 0]), new Float32Array([-7, -0.4, 0, 7, -0.4, 0]), new Float32Array([-7, 0, 0, -7, -0.4, 0]), new Float32Array([7, 0, 0, 7, -0.4, 0])];
+    // as wide and deep as the band needs (a big orchestra spreads out), at least 14 m by 8
+    const W = Math.ceil(Math.max(7, -x0 + 0.3, x1 + 0.3)), D = Math.ceil(Math.max(8, -z0 + 0.3));
+    const floor: Float32Array[] = [new Float32Array([-W, 0, 0, W, 0, 0, W, 0, -D, -W, 0, -D, -W, 0, 0]), new Float32Array([-W, -0.4, 0, W, -0.4, 0]), new Float32Array([-W, 0, 0, -W, -0.4, 0]), new Float32Array([W, 0, 0, W, -0.4, 0])];
     const grid: Float32Array[] = [];
-    for (let x = -6; x <= 6; x++) grid.push(new Float32Array([x, 0, 0, x, 0, -8]));
-    for (let z = -1; z >= -7; z--) grid.push(new Float32Array([-7, 0, z, 7, 0, z]));
+    for (let x = 1 - W; x < W; x++) grid.push(new Float32Array([x, 0, 0, x, 0, -D]));
+    for (let z = -1; z > -D; z--) grid.push(new Float32Array([-W, 0, z, W, 0, z]));
 
     const newPlayer = (kind: Kind, horn: Horn | null, dx: number, dz: number, still: Float32Array[], phase: number): Player => ({
       kind, horn, dx, dz, phase, still, hand: [0.2, 1, 0, -0.2, 1, 0], bow: 0.5, bowDir: 1, flips: 0, raise: 0, mouth: 0,
     });
-    const singer = newPlayer("singer", null, 0, 0, Pen.place(instrument("singer", "piano"), SINGER.x, SINGER.z, 0, 0), 0);
+    const singer = newPlayer("singer", null, 0, 0, [], 0);
+    let singerSize = 0;
+    // the voice's own head, on the singer's neck: stage → the singer's place (facing the
+    // audience, at its size) → the neck → body cm in the head's frame (+x forward), about its pivot
+    const head = new Anatomy3D();
+    head.centred = true;
+    const root = new THREE.Group();
+    const neck = new THREE.Group();
+    const shift = new THREE.Group();
+    root.position.set(SINGER.x, 0, SINGER.z);
+    root.rotation.y = Math.atan2(LISTENER.x - SINGER.x, LISTENER.z - SINGER.z);
+    neck.rotation.y = -Math.PI / 2;
+    scene.add(root);
+    root.add(neck);
+    neck.add(shift);
+    shift.add(head.group);
+    let headModel: VoiceModel | null = null;
     const singerLabel = label("Voce", "Solista", V.amber);
     singerLabel.position.set(SINGER.x, 3.0, SINGER.z);
     scene.add(singerLabel);
@@ -802,6 +878,7 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
       const h = wrap.clientHeight || 1;
       gl.setSize(w, h);
       beams.setResolution(w, h);
+      head.resize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       reset();
@@ -836,11 +913,42 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
         }
       }
       singerGlow = Math.max(singerRef.current() ? 1 : 0, singerGlow * 0.9);
-      for (const l of singer.still) beams.line(l, l.length / 3, V.amber, 1.05, { alpha: 0.55 + 0.45 * singerGlow });
+      const st = useStore.getState();
+      const size = sizeOf(st.body);
+      if (size !== singerSize) {
+        // the mic stand at the singer's height
+        singerSize = size;
+        singer.still = Pen.place(instrument("singer", "piano").map((l) => l.map((v) => v * size)), SINGER.x, SINGER.z, 0, 0);
+      }
+      for (const l of singer.still) beams.line(l, l.length / 3, V.blueMid, 1.05, { alpha: 0.55 + 0.45 * singerGlow });
       pen.at(SINGER.x, SINGER.z);
       pen.dx = pen.dz = 0;
+      pen.size = size;
       drawMusician(beams, pen, singer, undefined, t, w, dt, V.amber, singerGlow, singerGlow);
+      pen.size = 1;
       beams.end();
+      // dim with depth from wherever the view is (a big stage puts the camera further back)
+      const fog = scene.fog as THREE.Fog;
+      const d = camera.position.distanceTo(controls.target);
+      fog.near = d - 4;
+      fog.far = d + 16;
+      const m = modelRef.current;
+      if (m) {
+        if (m !== headModel) {
+          headModel = m;
+          shift.position.copy(head.pivot(m)).negate();
+        }
+        // NECK is the singer's, drawn last; the head's true size whatever the body's
+        neck.position.set(NECK[0], NECK[1] + 0.11, NECK[2] + 0.01);
+        root.scale.setScalar(SCALE * size);
+        neck.scale.setScalar(0.01 / size);
+        root.updateMatrixWorld(true);
+        head.camera.position.copy(camera.position);
+        const tele = engine.latest && sameBody(engine.latest.body, st.body) ? engine.latest : null;
+        const a = tele ? VoiceModel.articFromArray(tele.t.artic) : st.artic;
+        head.face.update(tele, dt);
+        head.update(m, m.frame(a), a, tele, st.view, dt);
+      }
       controls.update();
       gl.render(scene, camera);
     };
@@ -852,6 +960,7 @@ export function StageView(props: { performers: Performer[]; notes: BandNote[]; t
       gl.domElement.removeEventListener("dblclick", reset);
       controls.dispose();
       beams.dispose();
+      head.dispose();
       scene.traverse((o) => {
         const sp = o as THREE.Sprite;
         if (sp.isSprite) {

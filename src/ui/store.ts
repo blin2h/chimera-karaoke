@@ -6,7 +6,7 @@ import { defaultF0, PRESETS, sameBody, type BodyMix } from "./body.ts";
 import { creatureById } from "../wasm/engine.ts";
 import type { ParamDef } from "../wasm/types.ts";
 import { BEAT_PRESETS, BASS_NOTE, beatReady, parseBeat, type BeatStep } from "../wasm/engine.ts";
-import { singNoteOn, singNoteOff, stopSinging, ensureDictionary } from "./singing.ts";
+import { singNoteOn, singNoteOff, stopSinging, ensureDictionary, singOnAfterBodyChange } from "./singing.ts";
 import { stopSpeaking } from "./speech.ts";
 import { connectMidi, disconnectMidi, type MidiStatus } from "./midi.ts";
 
@@ -265,13 +265,16 @@ export const useStore = create<State>((set, get) => ({
   },
   setBody: (b) => {
     session++;
-    // the new voice starts without the old one's score: a sung note would hang
-    if (get().mode === "sing") stopSinging();
+    // the new voice starts without the old one's score (a sung note would hang, a song stall on a
+    // clock that restarts): stop it, and an imported song sings on from there with the new voice
+    const singOn = singOnAfterBodyChange();
+    stopSinging();
     const f0 = defaultF0(b);
     // nor does speech carry over (and the new voice's clock starts again from zero)
     if (get().mode === "speak") stopSpeaking();
     set((s) => ({ body: b, source: { ...s.source, f0 } }));
     engine.setBody(b);
+    singOn?.(b);
   },
   previewBody: (b) => set({ body: b }),
   setSource: (v) => {

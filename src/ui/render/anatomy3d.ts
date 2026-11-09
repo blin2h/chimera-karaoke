@@ -676,6 +676,18 @@ export class Anatomy3D {
     this.beams.dispose();
   }
 
+  /** the head's drawing, to put on a body elsewhere (the karaoke stage): its parent places it,
+   *  and `camera.position` must then be the viewer's position in that parent's world */
+  get group(): THREE.Group {
+    return this.beams.group;
+  }
+
+  /** the point the head nods about, at the top of the neck (body cm, head frame: +x forward) */
+  pivot(model: VoiceModel): THREE.Vector3 {
+    const rest = this.restFor(model);
+    return new THREE.Vector3(-2.4 * model.tract.scale, rest.head.y0 + 0.42 * (rest.condyle.y - rest.head.y0), 0);
+  }
+
   /** forget the motion so far (a replay jumped): the face's springs and held-note time, the
    *  outline echoes, the airflow's particle trails and the vocal folds' strobe phase */
   resetMotion(): void {
@@ -896,7 +908,7 @@ export class Anatomy3D {
    */
   private headPose(rest: Rest, k: number): void {
     const g = this.beams.group;
-    const pivot = this.v3.set(-2.4 * k, rest.head.y0 + 0.42 * (rest.condyle.y - rest.head.y0), 0);
+    const pivot = this.v3.set(-2.4 * k, rest.head.y0 + 0.42 * (rest.condyle.y - rest.head.y0), 0); // as pivot()
     this.turn.setFromEuler(this.euler.set(this.face.tilt, 0, this.face.nod));
     g.quaternion.copy(this.turn);
     g.position.copy(pivot).sub(pivot.applyQuaternion(this.turn));

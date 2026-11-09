@@ -16,6 +16,7 @@ import { FAMILY_LABEL } from "../../audio/gm.ts";
 import { AnatomyView3D } from "./AnatomyView3D.tsx";
 import { StageView } from "./StageView.tsx";
 import { Screen } from "./Screen.tsx";
+import { BodyPad } from "./BodyPad.tsx";
 import type { Syllable } from "../../wasm/types.ts";
 
 const SONG_FILE = /\.(kar|midi?)$/i;
@@ -82,6 +83,7 @@ export function KaraokePage() {
   /** sing the loaded song from second `from` */
   const sing = async (l: Loaded, from: number) => {
     setPausedAt(null);
+    setDragging(null);
     const positions = new Map(l.cast.map((p) => [p.channel, { x: p.x, z: p.z }]));
     await playImported(l.song, body, start, { space: { positions, listener: LISTENER }, timed: true, from });
   };
@@ -135,12 +137,15 @@ export function KaraokePage() {
         <span className="karaoke-title">{loaded ? title(loaded.file) : "Karaoke"}</span>
         <div className="karaoke-tools" role="group" aria-label="Song settings">
           <ChipGroup label="Lingua del testo" value={lang} options={[["it", "IT"], ["en", "EN"]]} onChange={(v) => setLang(v as "it" | "en")} />
-          <ChipGroup
-            label="Voce"
-            value={presetOf(body) ?? ""}
-            options={[["male", "Uomo"], ["female", "Donna"], ["child", "Bambino"]]}
-            onChange={(v) => setBody(PRESETS[v as keyof typeof PRESETS])}
-          />
+          <div className="body-control">
+            <ChipGroup
+              label="Voce"
+              value={presetOf(body) ?? ""}
+              options={[["male", "Uomo"], ["female", "Donna"], ["child", "Bambino"]]}
+              onChange={(v) => setBody(PRESETS[v as keyof typeof PRESETS])}
+            />
+            <BodyPad />
+          </div>
           <button type="button" className={`chip${band ? " on" : ""}`} aria-pressed={band} onClick={() => setBand(!band)} title="Suona anche gli strumenti del file (dal prossimo brano)">
             Strumenti
           </button>
@@ -226,6 +231,8 @@ export function KaraokePage() {
             value={Math.min(now, length)}
             disabled={!loaded}
             onChange={(e) => setDragging(Number(e.target.value))}
+            // keep the release even off the bar, or the bar stays where the drag left it
+            onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
             onPointerUp={(e) => seek(Number(e.currentTarget.value))}
             onKeyUp={(e) => seek(Number(e.currentTarget.value))}
             style={{ "--pos": `${length ? (100 * Math.min(now, length)) / length : 0}%` } as React.CSSProperties}
