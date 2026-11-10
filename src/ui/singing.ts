@@ -94,6 +94,10 @@ useLang.subscribe(({ lang: l }, prev) => {
   const lyrics = s.lyrics === DEFAULT_LYRICS[prev.lang] ? DEFAULT_LYRICS[l] : s.lyrics;
   useSing.setState({ lyrics, syllables: lyricsToSyllables(lyrics, l), cursor: 0 });
   ensureDictionary();
+  // a song playing on its own clock sings on, from here, in the new language
+  const t = songTime();
+  const im = imported;
+  if (t !== null && im) void playImported(im.song, im.body, undefined, { ...im.o, from: Math.max(0, t) });
 });
 
 // ---- live notes
@@ -287,7 +291,7 @@ export async function playDemo(name: string, body: BodyMix, ready?: () => Promis
  * song can start `from` any second (the karaoke player's timeline).
  */
 export async function playImported(song: KaraokeSong, body: BodyMix, ready?: () => Promise<void>, o: { space?: BandSpace; timed?: boolean; from?: number } = {}): Promise<void> {
-  imported = { song, o };
+  imported = { song, body, o };
   const l = lang();
   const words = song.words;
   const bandOn = useSing.getState().band && song.band.length > 0;
@@ -387,7 +391,7 @@ async function runSong(song: DemoSong, body: BodyMix, ready?: () => Promise<void
 }
 
 /** the last imported song and how it was played (to sing on with another voice) */
-let imported: { song: KaraokeSong; o: { space?: BandSpace; timed?: boolean } } | null = null;
+let imported: { song: KaraokeSong; body: BodyMix; o: { space?: BandSpace; timed?: boolean } } | null = null;
 
 /**
  * Before the voice changes: if an imported song is playing on its own clock, a function that
