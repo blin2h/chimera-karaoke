@@ -8,6 +8,7 @@
     "dev": "bun run wasm && vite --host 127.0.0.1",
     "build": "bun run wasm && tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "deploy": "bun run build && bunx wrangler deploy",
     "test": "bun run wasm && cargo test --workspace && bun test tests",
     "typecheck": "tsc --noEmit",
     "lint:layout": "bun run wasm && bun tools/layout-lint.ts",

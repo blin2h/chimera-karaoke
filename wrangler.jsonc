@@ -1,0 +1,7 @@
+// The site on Cloudflare: the Vite build served as static assets (no Worker code).
+// Deploy with `bun run deploy` (it builds first; the build needs Rust for the wasm).
+{
+  "name": "chimera-karaoke",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./dist" }
+}

@@ -58,7 +58,8 @@ bun run test       # wasm build, cargo test --workspace, bun test tests
 ```
 
 The AudioWorklet needs a secure context, so open it on localhost or over HTTPS (for example
-`tailscale serve`). Vercel builds it with `vercel.json`.
+`tailscale serve`). `bun run deploy` builds it and publishes it on Cloudflare (`wrangler.jsonc`,
+static assets; needs `wrangler login`).
 
 Offline renders and measurement:
 
