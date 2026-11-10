@@ -1,4 +1,30 @@
-# CHIMERA
+# CHIMERA Karaoke
+
+A karaoke that sings with a physically modelled voice. Open a folder of MIDI or `.kar` files
+and a simulated singer (lungs, vocal folds, a moving tongue, lips and jaw: no samples) sings
+the lyrics in Italian or English, over the file's own band, on a 3D concert stage drawn in lines.
+
+Built on [CHIMERA](https://github.com/jamesondh/chimera-vocal-synth) by Jameson Hodge, the voice
+synthesizer underneath (its engine, head and speech are described below). This repository started
+as a fork of it and keeps its history.
+
+## The karaoke
+
+Open `/?karaoke` (for example http://127.0.0.1:5317/?karaoke after `bun run dev`).
+
+- **Songs**: pick a folder or files of `.kar` / `.mid`. They are read in the browser and never
+  leave the computer. No songs are included: bring your own.
+- **The voice**: man, woman or child, or anything between them on the triangle; changing it
+  mid-song sings on from the same point. Lyrics in Italian (Wiktionary's pronunciations) or
+  English (CMUdict), switchable while singing.
+- **The band**: every channel of the file plays, General MIDI instruments placed and heard where
+  a band would stand. On stage each player is a line-drawn musician moving with its notes; the
+  singer wears the live 3D head, its mouth and face driven by the engine.
+- **Timeline**: pause, resume and seek; long silences in the files are closed up.
+
+---
+
+# CHIMERA, the engine
 
 A physical-modeling voice synthesizer in the browser. Every sound comes from a simulated
 airway (lungs, vocal folds or syrinx, a branched vocal tract, lips, nose), not from samples.
@@ -62,7 +88,7 @@ Agents: see [AGENTS.md](AGENTS.md).
 
 ## License
 
-[MIT](LICENSE). Bundled third-party files keep their own licenses: the CMU Pronouncing
+[MIT](LICENSE): CHIMERA © Jameson Hodge, the karaoke additions © blin2h. Bundled third-party files keep their own licenses: the CMU Pronouncing
 Dictionary ([public/data/CMUDICT-LICENSE.txt](public/data/CMUDICT-LICENSE.txt)), the Italian
 dictionary from Wiktionary, CC BY-SA 4.0 ([public/data/IT-DICT-LICENSE.txt](public/data/IT-DICT-LICENSE.txt)),
 and the fonts

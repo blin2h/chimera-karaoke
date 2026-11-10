@@ -1,6 +1,7 @@
-# CHIMERA
+# CHIMERA Karaoke
 
-A physical-modeling voice synthesizer: a Rust engine (wasm in an AudioWorklet, native for tests
+A karaoke (`?karaoke`: `src/ui/karaoke.ts`, `stage.ts`, `components/KaraokePage.tsx`, `src/audio/band.ts`)
+over CHIMERA, a physical-modeling voice synthesizer: a Rust engine (wasm in an AudioWorklet, native for tests
 and the CLI) under a React UI. See the README.
 
 ## Working here
