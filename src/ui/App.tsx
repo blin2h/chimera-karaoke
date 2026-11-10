@@ -53,7 +53,7 @@ function TopBar() {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="wordmark">Chimera</span>
+        <a className="wordmark" href="./" title="Karaoke">Chimera</a>
         <span className="tagline">A voice grown from a simulated airway</span>
       </div>
       <Segmented<Mode>
@@ -97,7 +97,7 @@ function TopBar() {
             {starting ? "Starting…" : "Start audio"}
           </button>
         )}
-        <a className="repo-link" href="https://github.com/jamesondh/chimera-vocal-synth" target="_blank" rel="noreferrer" aria-label="Source code on GitHub" title="Source code on GitHub">
+        <a className="repo-link" href="https://github.com/blin2h/chimera-karaoke" target="_blank" rel="noreferrer" aria-label="Source code on GitHub" title="Source code on GitHub">
           <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
             <path
               fill="currentColor"
@@ -216,13 +216,8 @@ function PlayRight() {
   );
 }
 
+/** The karaoke is the home page; the synthesizer is `?synth`, a duet `?show=<id>`. */
 export function App() {
-  if (new URLSearchParams(window.location.search).has("karaoke"))
-    return (
-      <Suspense fallback={null}>
-        <KaraokePage />
-      </Suspense>
-    );
   const show = showId();
   if (show)
     return (
@@ -230,7 +225,12 @@ export function App() {
         <DuetPage id={show} />
       </Suspense>
     );
-  return <Wall />;
+  if (new URLSearchParams(window.location.search).has("synth")) return <Wall />;
+  return (
+    <Suspense fallback={null}>
+      <KaraokePage />
+    </Suspense>
+  );
 }
 
 function Wall() {

@@ -10,7 +10,8 @@ as a fork of it and keeps its history.
 
 ## The karaoke
 
-Open `/?karaoke` (for example http://127.0.0.1:5317/?karaoke after `bun run dev`).
+It is the home page (http://127.0.0.1:5317/ after `bun run dev`); the synthesizer below is at
+`?synth` (click the CHIMERA wordmark to go between them).
 
 - **Songs**: pick a folder or files of `.kar` / `.mid`. They are read in the browser and never
   leave the computer. No songs are included: bring your own.

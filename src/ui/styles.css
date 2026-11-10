@@ -112,6 +112,10 @@ input {
   margin-right: auto;
 }
 
+a.wordmark {
+  color: inherit;
+  text-decoration: none;
+}
 .wordmark {
   font-stretch: 125%;
   font-weight: 800;

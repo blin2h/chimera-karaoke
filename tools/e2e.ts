@@ -6,7 +6,8 @@
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 
-const url = process.argv[2] ?? "http://127.0.0.1:5318/";
+// the synthesizer (the home page is the karaoke)
+const url = new URL("?synth", process.argv[2] ?? "http://127.0.0.1:5318/").href;
 const outDir = process.argv[3] ?? "out/e2e";
 mkdirSync(outDir, { recursive: true });
 

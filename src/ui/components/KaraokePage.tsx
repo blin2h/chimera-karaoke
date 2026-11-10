@@ -1,5 +1,5 @@
 /**
- * The karaoke player (`?karaoke`, CHIMERA v2): open a folder of MIDI / .kar files from your
+ * The karaoke player (the home page): open a folder of MIDI / .kar files from your
  * computer and the voice sings them, its head in 3D, over the file's band placed on a concert
  * stage (each instrument where a band would stand, and heard from there). The lyrics run below,
  * the syllable being sung lit. Files are read in the browser and never leave the computer.
@@ -133,7 +133,7 @@ export function KaraokePage() {
       }}
     >
       <header className="karaoke-top">
-        <span className="wordmark">Chimera</span>
+        <a className="wordmark" href="?synth" title="Il sintetizzatore">Chimera</a>
         <span className="karaoke-title">{loaded ? title(loaded.file) : "Karaoke"}</span>
         <div className="karaoke-tools" role="group" aria-label="Song settings">
           <ChipGroup label="Lingua del testo" value={lang} options={[["it", "IT"], ["en", "EN"]]} onChange={(v) => setLang(v as "it" | "en")} />

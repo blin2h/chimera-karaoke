@@ -323,7 +323,7 @@ async function main() {
       await page.close();
       continue;
     }
-    await page.goto(url, { waitUntil: "networkidle" });
+    await page.goto(new URL("?synth", url).href, { waitUntil: "networkidle" });
     for (const m of modes) {
       await mode(m);
       await check(m);
